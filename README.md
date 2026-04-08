@@ -20,7 +20,7 @@ All results are stored in the `Result` directory.
 ## Data Structure
 
 For each calibration scenario, we provide:
-- The number of elements (`numel`) for each calibration matrix
+- The number of elements for each calibration matrix
 - Corresponding data organized in separate folders
 
 ## Usage
