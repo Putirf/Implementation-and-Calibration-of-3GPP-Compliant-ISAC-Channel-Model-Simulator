@@ -189,11 +189,12 @@ as = cellfun(@calc_one_as_bg, ang, pow);
 end
 
 function as = calc_one_as_bg(ang, pow)
-
+ang = ang(~isnan(ang));
 ang = ang(:).';              % row vector
 ang = ang * pi/180;          % deg -> rad
 
-pow = repmat((pow(:)/20).', 1, 20) .* ones(size(ang));
+pow = repmat((pow(:)/20).', 1, 20);
+pow = pow(~isnan(ang));
 pow = pow(:).';
 pow = pow / sum(pow);
 
@@ -215,14 +216,14 @@ set(gca,'FontSize',12);
 
 styleMap.GHZ6_simColor   = [0.10 0.45 0.85];
 styleMap.GHZ30_simColor   = [0.90 0.45 0.10];
-oursData_6GHz = oursData_6GHz(~isnan(oursData_6GHz));
+
 x_ours_6GHz = sort(oursData_6GHz);
 N = numel(x_ours_6GHz);
 f_ours_6GHz = (1:N).' / N*100;
 
 plot(x_ours_6GHz, f_ours_6GHz, '-','Color', styleMap.GHZ6_simColor,'LineWidth', 1.8);
 
-oursData_30GHz = oursData_30GHz(~isnan(oursData_30GHz));
+
 x_ours_30GHz = sort(oursData_30GHz);
 N = numel(x_ours_30GHz);
 f_ours_30GHz = (1:N).' / N*100;
