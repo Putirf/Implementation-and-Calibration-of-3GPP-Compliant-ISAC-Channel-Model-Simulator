@@ -31,4 +31,25 @@ To reproduce the calibration plots:
 2. Run the script to generate the corresponding calibration results for each scenario
 
 
+## Publication
+
+This project is associated with the following published paper:
+
+**Implementation and Calibration of 3GPP-Compliant ISAC Channel Simulator**
+
+If you find this repository, calibration results, or implementation useful for your research, please cite the corresponding paper.
+
+
+## Usage Notice
+
+This repository is provided for academic and research reference purposes.
+
+Unless otherwise stated in a separate license file, all rights to the source code, calibration data, figures, and related materials are reserved by the authors. Users may view the repository contents for research reference, but no permission is granted for redistribution, modification, or commercial use without prior written permission from the authors.
+
+If you use this repository, calibration results, or implementation details in academic work, please cite the corresponding paper:
+
+**Implementation and Calibration of 3GPP-Compliant ISAC Channel Simulator**
+
+
+
 
