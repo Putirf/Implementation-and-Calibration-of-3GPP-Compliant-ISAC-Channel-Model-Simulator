@@ -4,8 +4,8 @@ clearvars;
 
 %% Calibration controls
 case_id = 7;
-full_cali = false;
-do_rp = false;
+full_cali = true;
+do_rp = true;
 current_time = 0;
 plot_controller = true;
 calibration_root = [];
@@ -14,7 +14,7 @@ use_isac_frequency_preset = true;
 isac_frequency_preset = 'ISAC_FR1';
 custom_frequency_config = struct();
 
-run_all_calibration_cases = false;
+run_all_calibration_cases = true;
 calibration_frequency_presets = {'ISAC_FR1', 'ISAC_FR2'};
 
 
