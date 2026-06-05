@@ -2,8 +2,6 @@
 
 This repository presents an implementation of the Integrated Sensing and Communication (ISAC) channel model based on 3GPP TR 38.901 (v19).
 
-The full source code will be released after the acceptance of the corresponding paper.
-
 <p align="center">
   <img src="https://github.com/user-attachments/assets/ab331751-f0b5-403d-abff-9277f0e265f4" width="800">
 </p>
