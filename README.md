@@ -47,7 +47,7 @@ If you find this repository, calibration results, or implementation useful for y
 
 ## Usage Notice
 
-This repository is provided for academic and research reference purposes.
+This repository .is provided, and the use of source for academic purpose is allowed only if the correct citation to the associated paper is conducted.
 
 Unless otherwise stated in a separate license file, all rights to the source code, calibration data, figures, and related materials are reserved by the authors. Users may view the repository contents for research reference, but no permission is granted for redistribution, modification, or commercial use without prior written permission from the authors.
 
