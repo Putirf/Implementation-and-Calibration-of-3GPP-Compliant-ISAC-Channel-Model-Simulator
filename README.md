@@ -43,6 +43,8 @@ This project is associated with the following published paper:
 
 **Implementation and Calibration of 3GPP-Compliant ISAC Channel Simulator**
 
+https://arxiv.org/abs/2606.07328
+
 If you find this repository, calibration results, or implementation useful for your research, please cite the corresponding paper.
 
 ## Usage Notice
