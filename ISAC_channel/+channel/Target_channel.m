@@ -297,11 +297,18 @@ classdef Target_channel < handle
                         Pr_LOS = obj.scenario.p_subsce*exp(-d_2Din/k_subsce);
                     end
                 case 'UrbanGrid'
-                    % Pr_LOS = min(1,1.05*exp(-0.0114*d2D));
-                    if d2D <= 18
-                        Pr_LOS = 1;
+                    if obj.fc < 30e9
+                        % TEMP UrbanGrid calibration workaround: FR1 follows TR 37.885 Urban V2X LOS probability.
+                        % TR 37.885 itself does not define a frequency-dependent LOS split.
+                        Pr_LOS = min(1, 1.05 * exp(-0.0114 * d2D));
                     else
-                        Pr_LOS = 18/d2D + exp(-d2D/63)*(1 - 18/d2D);
+                        % TEMP UrbanGrid calibration workaround: keep previous formula for FR2 because 30GHz benchmark matched.
+                        % Original active formula before FR1 calibration:
+                        if d2D <= 18
+                            Pr_LOS = 1;
+                        else
+                            Pr_LOS = 18/d2D + exp(-d2D/63)*(1 - 18/d2D);
+                        end
                     end
             end
             randlos = (txrx==1)* obj.ST.rand_LoS(obj.sector(1).ID) + (txrx==2)* obj.ST.rand_LoS(obj.sector(obj.TXRX).ID);
