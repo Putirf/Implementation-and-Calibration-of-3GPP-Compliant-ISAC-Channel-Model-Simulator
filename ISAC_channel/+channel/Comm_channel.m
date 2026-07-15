@@ -76,7 +76,7 @@ classdef Comm_channel < handle
         H_full
         tau_channel
 
-        isRP
+        isRP = false
     end
 
     methods
@@ -95,8 +95,9 @@ classdef Comm_channel < handle
                 obj.isRP  = true;
             else
                 if ismember(scenario.name,{'RMa','UMa','UMi'})
-                    [~, wrapped_site_idx] = min(sum(((repmat(RX.Position(:,1:2), size(TX.cluster_wrapped,1), 1)-TX.cluster_wrapped).^2),2));
-                    obj.TX_pos_wrap = TX.cluster_wrapped(wrapped_site_idx,:);
+                    wrapped_positions = repmat(TX.Position(1:2), size(TX.cluster_wrapped,1), 1) + TX.cluster_wrapped;
+                    [~, wrapped_site_idx] = min(sum(((repmat(RX.Position(:,1:2), size(wrapped_positions,1), 1)-wrapped_positions).^2),2));
+                    obj.TX_pos_wrap = wrapped_positions(wrapped_site_idx,:);
                 elseif ismember(scenario.name,{'InH','InF','UrbanGrid'})
                     obj.TX_pos_wrap = TX.Position;
                 end
@@ -1337,11 +1338,14 @@ classdef Comm_channel < handle
 
         function [ as, mean_angle ]  = calc_angular_spreads(obj,ang,LOSang,wrap_angles)
             % CALC_ANGULAR_SPREADS Calculates the angular spread in degree
-            ang = ang(~isnan(ang));
+            valid_mask = ~isnan(ang);
+            ang = ang(valid_mask);
             ang = ang(:).'*pi/180;
-            % pow = repmat((obj.Pn/obj.M).',1,obj.M).*obj.loss_blockage;
             pow = repmat((obj.Pn/obj.M).',1,obj.M);
-            pow = pow(~isnan(ang));
+            if ~isempty(obj.loss_blockage)
+                pow = pow .* obj.loss_blockage;
+            end
+            pow = pow(valid_mask);
             pow = pow(:).';
             % Normalize powers
             pt = sum( pow,2 );
@@ -1382,9 +1386,7 @@ classdef Comm_channel < handle
             ds = sqrt( sum(pow.*(sort_idx.^2))); %  - sum(pow.*sort_idx).^2
             % ds = sqrt( sum(pow.*((taus).^2)) - mean_delay.^2 ); %  - sum(pow.*sort_idx).^2
         end
-    end
 
-    methods(Access = private)
         function [rn1, rn2, rn3] = drawCouplingSeeds(obj)
             rn1 = rand(obj.N_new, obj.M);
             rn2 = rand(obj.N_new, obj.M);
