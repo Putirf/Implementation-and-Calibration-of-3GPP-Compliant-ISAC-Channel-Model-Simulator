@@ -46,6 +46,7 @@ classdef Comm_channel < handle
         c_ASD
         c_ZSD
         drop_rp_angle
+        tau_absolute
         delta_tau
 
         tau_order
@@ -53,6 +54,7 @@ classdef Comm_channel < handle
         tau_n_LOS
         Pn
         Pn_LOS
+        cluster_shadow_dB
         keep
         N_new
         strong_cluster_id
@@ -68,6 +70,11 @@ classdef Comm_channel < handle
         PHI_LOS
 
         loss_blockage
+        tau_prime
+        phi_prime_AOA
+        phi_prime_AOD
+        theta_prime_ZOA
+        theta_prime_ZOD
 
         S
         U
@@ -133,17 +140,40 @@ classdef Comm_channel < handle
 
             % the following steps is needed only when fast fading is enable
             if fastfading_enable
-                %% step 5: Generate cluster delays
-                obj.cluster_delay();
-
-                %% step 6: Generate cluster powers
-                obj.cluster_power()
-
-                %% step 7: Generate arrival angles and departure angles for both azimuth and elevation
-                obj.AOA_calc();
-                obj.AOD_calc();
-                obj.ZOA_calc();
-                obj.ZOD_calc();
+                if obj.isSpatialConsistencyProcedureA()
+                    obj.assertProcedureASupported();
+                    if obj.t <= 0 || ~obj.hasProcedureAState()
+                        obj.cluster_delay_procedureA_initial();
+                        obj.cluster_power();
+                        obj.AOA_calc();
+                        obj.AOD_calc();
+                        obj.ZOA_calc();
+                        obj.ZOD_calc();
+                    else
+                        obj.cluster_delay_procedureA();
+                        obj.cluster_angles_procedureA();
+                        obj.cluster_power_procedureA();
+                        obj.apply_angle_offsets_procedureB();
+                    end
+                    obj.saveProcedureAState();
+                elseif obj.isSpatialConsistencyProcedureB()
+                    obj.assertProcedureBSupported();
+                    %% step 5-7: Procedure B for spatial consistency
+                    obj.cluster_delay_procedureB();
+                    obj.cluster_angles_procedureB();
+                    obj.cluster_power_procedureB();
+                    obj.apply_angle_offsets_procedureB();
+                else
+                    %% step 5: Generate cluster delays
+                    obj.cluster_delay();
+                    %% step 6: Generate cluster powers
+                    obj.cluster_power()
+                    %% step 7: Generate arrival angles and departure angles for both azimuth and elevation
+                    obj.AOA_calc();
+                    obj.AOD_calc();
+                    obj.ZOA_calc();
+                    obj.ZOD_calc();
+                end
                 if strcmp(obj.RX.type,'RP')
                     obj.phi_n_m_AOA = obj.phi_n_m_AOD;
                     obj.theta_n_m_ZOA = obj.theta_n_m_ZOD;
@@ -889,9 +919,10 @@ classdef Comm_channel < handle
 
         % step 6: Generate cluster powers
         function cluster_power(obj)
-                cluster_shadow_dB = randn(obj.N,1)*obj.zeta;
+                shadow_dB = randn(obj.N,1)*obj.zeta;
+                obj.cluster_shadow_dB = shadow_dB;
             % end
-            cluster_power_raw = exp(-obj.tau_n.*(obj.r_tau-1)./obj.r_tau./obj.DS).*(10.^(-cluster_shadow_dB.'/10));
+            cluster_power_raw = exp(-obj.tau_n.*(obj.r_tau-1)./obj.r_tau./obj.DS).*(10.^(-shadow_dB.'/10));
             obj.Pn = cluster_power_raw/sum(cluster_power_raw);
             obj.Pn_LOS = obj.Pn;
             if obj.LOS && ~obj.O2I
@@ -907,8 +938,12 @@ classdef Comm_channel < handle
                 keep_tmp(obj.Pn_LOS == max(obj.Pn_LOS(~keep_tmp))) = true;
             end
             obj.keep  = keep_tmp;
+            if ~isempty(obj.tau_absolute)
+                obj.tau_absolute = obj.tau_absolute(keep_tmp);
+            end
             obj.tau_n  = obj.tau_n(keep_tmp);
             obj.tau_n_LOS  = obj.tau_n_LOS(keep_tmp);
+            obj.cluster_shadow_dB = obj.cluster_shadow_dB(keep_tmp);
             obj.Pn     = obj.Pn(keep_tmp);
             obj.Pn_LOS = obj.Pn_LOS(keep_tmp);
             obj.N_new  = numel(obj.Pn);
@@ -924,6 +959,260 @@ classdef Comm_channel < handle
         end
 
         % caculator the AOA for every ray
+        function cluster_delay_procedureB(obj)
+            limits = obj.procedureBClusterLimits();
+            obj.tau_prime = limits.delay*obj.drawProcedureBUniform('tau', obj.N);
+            [obj.tau_n, obj.tau_order] = sort(obj.tau_prime - min(obj.tau_prime));
+            obj.tau_prime = obj.tau_n;
+            if obj.LOS && ~obj.O2I
+                obj.tau_prime(1) = 0;
+                obj.tau_n(1) = 0;
+            end
+            obj.tau_n_LOS = obj.tau_n;
+        end
+
+        function cluster_angles_procedureB(obj)
+            limits = obj.procedureBClusterLimits();
+            obj.phi_prime_AOA = limits.AOA*(2*obj.drawProcedureBUniform('AOA', obj.N)-1);
+            obj.phi_prime_AOD = limits.AOD*(2*obj.drawProcedureBUniform('AOD', obj.N)-1);
+            obj.theta_prime_ZOA = limits.ZOA*(2*obj.drawProcedureBUniform('ZOA', obj.N)-1);
+            obj.theta_prime_ZOD = limits.ZOD*(2*obj.drawProcedureBUniform('ZOD', obj.N)-1);
+
+            if ~isempty(obj.tau_order)
+                obj.phi_prime_AOA = obj.phi_prime_AOA(obj.tau_order);
+                obj.phi_prime_AOD = obj.phi_prime_AOD(obj.tau_order);
+                obj.theta_prime_ZOA = obj.theta_prime_ZOA(obj.tau_order);
+                obj.theta_prime_ZOD = obj.theta_prime_ZOD(obj.tau_order);
+            end
+
+            if obj.LOS && ~obj.O2I
+                obj.phi_prime_AOA(1) = 0;
+                obj.phi_prime_AOD(1) = 0;
+                obj.theta_prime_ZOA(1) = 0;
+                obj.theta_prime_ZOD(1) = 0;
+            end
+        end
+
+        function cluster_delay_procedureA(obj)
+            state = obj.getProcedureAState();
+            if isempty(state) || ~isfield(state, 'tau_absolute') || isempty(state.tau_absolute)
+                obj.cluster_delay_procedureA_initial();
+                return;
+            end
+
+            obj.N = numel(state.tau_absolute);
+            delta_t = max(obj.t - state.time, 0);
+            tx_delta = obj.velocityVector(obj.TX) * delta_t;
+            rx_delta = obj.velocityVector(obj.RX) * delta_t;
+            tau_update = zeros(1, obj.N);
+            for cluster_idx = 1:obj.N
+                aoa_unit = obj.unitVectorFromAngles( ...
+                    obj.phi_LOS_AOA + state.phi_prime_AOA(cluster_idx), ...
+                    obj.theta_LOS_ZOA + state.theta_prime_ZOA(cluster_idx));
+                aod_unit = obj.unitVectorFromAngles( ...
+                    obj.phi_LOS_AOD + state.phi_prime_AOD(cluster_idx), ...
+                    obj.theta_LOS_ZOD + state.theta_prime_ZOD(cluster_idx));
+                tau_update(cluster_idx) = (-dot(rx_delta, aoa_unit) + dot(tx_delta, aod_unit)) / 3e8;
+            end
+
+            tau_abs = max(state.tau_absolute + tau_update, 0);
+            tau_tmp = tau_abs - min(tau_abs);
+            if obj.LOS && ~obj.O2I
+                tau_tmp(1) = 0;
+            end
+            obj.tau_absolute = tau_abs;
+            obj.tau_n = tau_tmp;
+            obj.tau_prime = tau_tmp;
+            obj.tau_order = state.tau_order;
+            obj.tau_n_LOS = tau_tmp;
+        end
+
+        function cluster_delay_procedureA_initial(obj)
+            tau_raw = -obj.r_tau*obj.DS*log(rand(1, obj.N));
+            obj.tau_absolute = obj.d_3D/3e8 + tau_raw;
+            [obj.tau_n, obj.tau_order] = sort(obj.tau_absolute - min(obj.tau_absolute));
+            obj.tau_absolute = obj.tau_absolute(obj.tau_order);
+            obj.tau_prime = obj.tau_n;
+            obj.tau_n_LOS = obj.tau_n;
+            if obj.LOS && ~obj.O2I
+                C_tau = 0.7705-0.0433*obj.K+0.0002*obj.K^2+0.000017*obj.K^3;
+                obj.tau_n_LOS = obj.tau_n/C_tau;
+                obj.tau_n(1) = 0;
+                obj.tau_prime(1) = 0;
+            end
+        end
+
+        function cluster_angles_procedureA(obj)
+            state = obj.getProcedureAState();
+            if isempty(state) || ~isfield(state, 'phi_prime_AOA') || ...
+                    numel(state.phi_prime_AOA) ~= obj.N
+                obj.cluster_angles_procedureB();
+                return;
+            end
+
+            delta_t = max(obj.t - state.time, 0);
+            tx_velocity = obj.velocityVector(obj.TX);
+            rx_velocity = obj.velocityVector(obj.RX);
+
+            prev_phi_AOA = state.phi_LOS_AOA + state.phi_prime_AOA;
+            prev_phi_AOD = state.phi_LOS_AOD + state.phi_prime_AOD;
+            prev_theta_ZOA = state.theta_LOS_ZOA + state.theta_prime_ZOA;
+            prev_theta_ZOD = state.theta_LOS_ZOD + state.theta_prime_ZOD;
+            x_n = obj.procedureAXnFromState(state, numel(prev_phi_AOA));
+            [rx_velocity_eff, tx_velocity_eff] = obj.procedureAEffectiveVelocities( ...
+                prev_phi_AOA, prev_theta_ZOA, prev_phi_AOD, prev_theta_ZOD, ...
+                tx_velocity, rx_velocity, x_n, obj.LOS && ~obj.O2I);
+
+            [phi_AOA, theta_ZOA] = obj.updateProcedureAAnglePair( ...
+                prev_phi_AOA, prev_theta_ZOA, rx_velocity_eff, obj.tau_n, delta_t);
+            [phi_AOD, theta_ZOD] = obj.updateProcedureAAnglePair( ...
+                prev_phi_AOD, prev_theta_ZOD, tx_velocity_eff, obj.tau_n, delta_t);
+
+            obj.phi_prime_AOA = obj.wrapAzimuthAngles(phi_AOA - obj.phi_LOS_AOA);
+            obj.phi_prime_AOD = obj.wrapAzimuthAngles(phi_AOD - obj.phi_LOS_AOD);
+            obj.theta_prime_ZOA = theta_ZOA - obj.theta_LOS_ZOA;
+            obj.theta_prime_ZOD = theta_ZOD - obj.theta_LOS_ZOD;
+
+            if obj.LOS && ~obj.O2I
+                obj.phi_prime_AOA(1) = 0;
+                obj.phi_prime_AOD(1) = 0;
+                obj.theta_prime_ZOA(1) = 0;
+                obj.theta_prime_ZOD(1) = 0;
+            end
+        end
+
+        function cluster_power_procedureB(obj)
+            shadow_dB = obj.drawProcedureBGaussian('shadow', obj.N).' * obj.zeta;
+            obj.cluster_shadow_dB = shadow_dB.';
+            ds_power = obj.DS;
+            asa_power = obj.ASA;
+            asd_power = obj.ASD;
+            zsa_power = obj.ZSA;
+            zsd_power = obj.ZSD;
+            rice_linear = 0;
+
+            if obj.LOS && ~obj.O2I
+                rice_linear = 10^(obj.K/10);
+                ds_power = ds_power*sqrt((1 + rice_linear)/2);
+                asa_power = asa_power*sqrt(1 + rice_linear);
+                asd_power = asd_power*sqrt(1 + rice_linear);
+                zsa_power = zsa_power*sqrt(1 + rice_linear);
+                zsd_power = zsd_power*sqrt(1 + rice_linear);
+            end
+
+            cluster_power_raw = exp(-obj.tau_prime./ds_power) ...
+                .* exp(-sqrt(2)*abs(obj.phi_prime_AOA)./asa_power) ...
+                .* exp(-sqrt(2)*abs(obj.phi_prime_AOD)./asd_power) ...
+                .* exp(-sqrt(2)*abs(obj.theta_prime_ZOA)./zsa_power) ...
+                .* exp(-sqrt(2)*abs(obj.theta_prime_ZOD)./zsd_power) ...
+                .* 10.^(-shadow_dB.'/10);
+
+            if obj.LOS && ~obj.O2I
+                obj.Pn = (cluster_power_raw./sum(cluster_power_raw))/(1 + rice_linear);
+                obj.Pn(1) = obj.Pn(1) + rice_linear/(1 + rice_linear);
+            else
+                obj.Pn = cluster_power_raw./sum(cluster_power_raw);
+            end
+
+            obj.Pn_LOS = obj.Pn;
+            keep_tmp = true(size(obj.Pn));
+            obj.keep = keep_tmp;
+            obj.tau_n = obj.tau_n(keep_tmp);
+            obj.tau_n_LOS = obj.tau_n_LOS(keep_tmp);
+            obj.tau_prime = obj.tau_prime(keep_tmp);
+            obj.phi_prime_AOA = obj.phi_prime_AOA(keep_tmp);
+            obj.phi_prime_AOD = obj.phi_prime_AOD(keep_tmp);
+            obj.theta_prime_ZOA = obj.theta_prime_ZOA(keep_tmp);
+            obj.theta_prime_ZOD = obj.theta_prime_ZOD(keep_tmp);
+            obj.Pn = obj.Pn(keep_tmp);
+            obj.Pn_LOS = obj.Pn_LOS(keep_tmp);
+            obj.N_new = numel(obj.Pn);
+            [~, sort_idx] = sort((1./obj.Pn));
+            obj.strong_cluster_id = sort_idx(1:min(2, numel(sort_idx)));
+            obj.map_delay = zeros(1, obj.M);
+            if ~isempty(obj.c_DS)
+                obj.map_delay([9,10,11,12,17,18]) = obj.c_DS*1.28e-9;
+                obj.map_delay(13:16) = obj.c_DS*2.56e-9;
+            else
+                obj.map_delay(9:18) = 3.91e-9;
+            end
+        end
+
+        function cluster_power_procedureA(obj)
+            state = obj.getProcedureAState();
+            if ~isempty(state) && isfield(state, 'cluster_shadow_dB') && ...
+                    numel(state.cluster_shadow_dB) == obj.N
+                obj.cluster_shadow_dB = state.cluster_shadow_dB(:);
+            else
+                obj.cluster_shadow_dB = randn(obj.N, 1) * obj.zeta;
+            end
+
+            ds_power = obj.DS;
+            rice_linear = 0;
+            if obj.LOS && ~obj.O2I
+                rice_linear = 10^(obj.K/10);
+            end
+
+            cluster_power_raw = exp(-obj.tau_n.*(obj.r_tau - 1)./obj.r_tau./ds_power) ...
+                .* 10.^(-obj.cluster_shadow_dB.'/10);
+
+            if obj.LOS && ~obj.O2I
+                obj.Pn = (cluster_power_raw./sum(cluster_power_raw))/(1 + rice_linear);
+                obj.Pn(1) = obj.Pn(1) + rice_linear/(1 + rice_linear);
+            else
+                obj.Pn = cluster_power_raw./sum(cluster_power_raw);
+            end
+
+            obj.Pn_LOS = obj.Pn;
+            obj.keep = true(size(obj.Pn));
+            obj.tau_n = obj.tau_n(obj.keep);
+            obj.tau_n_LOS = obj.tau_n_LOS(obj.keep);
+            obj.tau_prime = obj.tau_prime(obj.keep);
+            obj.phi_prime_AOA = obj.phi_prime_AOA(obj.keep);
+            obj.phi_prime_AOD = obj.phi_prime_AOD(obj.keep);
+            obj.theta_prime_ZOA = obj.theta_prime_ZOA(obj.keep);
+            obj.theta_prime_ZOD = obj.theta_prime_ZOD(obj.keep);
+            obj.Pn = obj.Pn(obj.keep);
+            obj.Pn_LOS = obj.Pn_LOS(obj.keep);
+            obj.cluster_shadow_dB = obj.cluster_shadow_dB(obj.keep);
+            obj.N_new = numel(obj.Pn);
+            [~, sort_idx] = sort((1./obj.Pn));
+            obj.strong_cluster_id = sort_idx(1:min(2, numel(sort_idx)));
+            obj.map_delay = zeros(1, obj.M);
+            if ~isempty(obj.c_DS)
+                obj.map_delay([9,10,11,12,17,18]) = obj.c_DS*1.28e-9;
+                obj.map_delay(13:16) = obj.c_DS*2.56e-9;
+            else
+                obj.map_delay(9:18) = 3.91e-9;
+            end
+        end
+
+        function apply_angle_offsets_procedureB(obj)
+            ray_angle_offset = [0.0447, -0.0447, 0.1413, -0.1413, 0.2492, -0.2492, 0.3715, -0.3715, 0.5129, -0.5129,...
+                0.6797, -0.6797, 0.8844, -0.8844, 1.1481, -1.1481, 1.5195, -1.5195, 2.1551, -2.1551];
+
+            phi_n_AOA = obj.phi_LOS_AOA + obj.phi_prime_AOA;
+            phi_n_AOD = obj.phi_LOS_AOD + obj.phi_prime_AOD;
+            ZOA = obj.theta_LOS_ZOA;
+            ZOA(obj.O2I) = 90;
+            theta_n_ZOA = ZOA + obj.theta_prime_ZOA;
+            theta_n_ZOD = obj.theta_LOS_ZOD + obj.mu_offset_ZOD + obj.theta_prime_ZOD;
+
+            obj.phi_n_m_AOA = repmat(phi_n_AOA.', 1, obj.M) + obj.c_ASA(ones(obj.N_new,1))*ray_angle_offset;
+            obj.phi_n_m_AOD = repmat(phi_n_AOD.', 1, obj.M) + obj.c_ASD(ones(obj.N_new,1))*ray_angle_offset;
+            obj.theta_n_m_ZOA = repmat(theta_n_ZOA.', 1, obj.M) + obj.c_ZSA(ones(obj.N_new,1))*ray_angle_offset;
+
+            zsd_offset_scale = (3/8)*(10^obj.mu_lgZSD);
+            obj.theta_n_m_ZOD = repmat(theta_n_ZOD.', 1, obj.M) + zsd_offset_scale(ones(obj.N_new,1))*ray_angle_offset;
+
+            obj.phi_n_m_AOA = obj.wrapAzimuthAngles(obj.phi_n_m_AOA);
+            obj.phi_n_m_AOD = obj.wrapAzimuthAngles(obj.phi_n_m_AOD);
+            obj.theta_n_m_ZOA = obj.wrapZenithAngles(obj.theta_n_m_ZOA);
+            obj.theta_n_m_ZOD = obj.wrapZenithAngles(obj.theta_n_m_ZOD);
+        end
+
+        % caculator the AOA for every ray
+
         function AOA_calc(obj)
             %             if strcmp(obj.scenario.name,'InH')
             %                 nlos_az_scale_table = [1.434, 1,1,1, 1.501];
@@ -1385,6 +1674,535 @@ classdef Comm_channel < handle
             sort_idx = taus - mean_delay;
             ds = sqrt( sum(pow.*(sort_idx.^2))); %  - sum(pow.*sort_idx).^2
             % ds = sqrt( sum(pow.*((taus).^2)) - mean_delay.^2 ); %  - sum(pow.*sort_idx).^2
+        end
+
+    end
+
+    methods(Access = private)
+        function assertProcedureBSupported(obj)
+            if ~ismember(obj.scenario.name, {'UrbanGrid', 'UMi', 'InH'})
+                error('CommChannel:UnsupportedSpatialConsistencyProcedureB', ...
+                    'Spatial consistency Procedure B is currently implemented only for UrbanGrid, UMi and InH scenarios.');
+            end
+        end
+
+        function assertProcedureASupported(obj)
+            if ~ismember(obj.scenario.name, {'UrbanGrid', 'UMi'})
+                error('CommChannel:UnsupportedSpatialConsistencyProcedureA', ...
+                    'Spatial consistency Procedure A is currently implemented only for UrbanGrid and UMi scenarios.');
+            end
+        end
+
+        function limits = procedureBClusterLimits(obj)
+            fc_GHz = obj.fc/1e9;
+            if strcmp(obj.scenario.name, 'UrbanGrid')
+                fc_eval = max(fc_GHz, 6);
+                if obj.O2I
+                    mu_lgDS = -6.62;
+                    sigma_lgDS = 0.32;
+                    mu_lgASD = 1.25;
+                    sigma_lgASD = 0.42;
+                    mu_lgASA = 1.76;
+                    sigma_lgASA = 0.16;
+                    mu_lgZSA = 1.01;
+                    sigma_lgZSA = 0.43;
+                elseif obj.LOS
+                    mu_lgDS = -6.955 - 0.0963*log10(fc_eval);
+                    sigma_lgDS = 0.66;
+                    mu_lgASD = 1.06 + 0.1114*log10(fc_eval);
+                    sigma_lgASD = 0.28;
+                    mu_lgASA = 1.81;
+                    sigma_lgASA = 0.20;
+                    mu_lgZSA = 0.95;
+                    sigma_lgZSA = 0.16;
+                else
+                    mu_lgDS = -6.28 - 0.204*log10(fc_eval);
+                    sigma_lgDS = 0.39;
+                    mu_lgASD = 1.5 - 0.1144*log10(fc_eval);
+                    sigma_lgASD = 0.28;
+                    mu_lgASA = 2.08 - 0.27*log10(fc_eval);
+                    sigma_lgASA = 0.11;
+                    mu_lgZSA = -0.3236*log10(fc_eval) + 1.512;
+                    sigma_lgZSA = 0.16;
+                end
+            elseif strcmp(obj.scenario.name, 'UMi')
+                fc_eval = max(fc_GHz, 2);
+                if obj.O2I
+                    mu_lgDS = -6.62;
+                    sigma_lgDS = 0.32;
+                    mu_lgASD = 1.25;
+                    sigma_lgASD = 0.42;
+                    mu_lgASA = 1.76;
+                    sigma_lgASA = 0.16;
+                    mu_lgZSA = 1.01;
+                    sigma_lgZSA = 0.43;
+                elseif obj.LOS
+                    mu_lgDS = -0.24*log10(1 + fc_eval) - 7.14;
+                    sigma_lgDS = 0.38;
+                    mu_lgASD = -0.05*log10(1 + fc_eval) + 1.21;
+                    sigma_lgASD = 0.41;
+                    mu_lgASA = -0.08*log10(1 + fc_eval) + 1.73;
+                    sigma_lgASA = 0.014*log10(1 + fc_eval) + 0.28;
+                    mu_lgZSA = -0.1*log10(1 + fc_eval) + 0.73;
+                    sigma_lgZSA = -0.04*log10(1 + fc_eval) + 0.34;
+                else
+                    mu_lgDS = -0.24*log10(1 + fc_eval) - 6.83;
+                    sigma_lgDS = 0.16*log10(1 + fc_eval) + 0.28;
+                    mu_lgASD = -0.23*log10(1 + fc_eval) + 1.53;
+                    sigma_lgASD = 0.11*log10(1 + fc_eval) + 0.33;
+                    mu_lgASA = -0.08*log10(1 + fc_eval) + 1.81;
+                    sigma_lgASA = 0.05*log10(1 + fc_eval) + 0.3;
+                    mu_lgZSA = -0.04*log10(1 + fc_eval) + 0.92;
+                    sigma_lgZSA = -0.07*log10(1 + fc_eval) + 0.41;
+                end
+            elseif strcmp(obj.scenario.name, 'InH')
+                fc_eval = max(fc_GHz, 6);
+                if obj.LOS
+                    mu_lgDS = -0.01*log10(1 + fc_eval) - 7.692;
+                    sigma_lgDS = 0.18;
+                    mu_lgASD = 1.60;
+                    sigma_lgASD = 0.18;
+                    mu_lgASA = -0.19*log10(1 + fc_eval) + 1.781;
+                    sigma_lgASA = 0.12*log10(1 + fc_eval) + 0.119;
+                    mu_lgZSA = -0.26*log10(1 + fc_eval) + 1.44;
+                    sigma_lgZSA = -0.04*log10(1 + fc_eval) + 0.264;
+                else
+                    mu_lgDS = -0.28*log10(1 + fc_eval) - 7.173;
+                    sigma_lgDS = 0.1*log10(1 + fc_eval) + 0.055;
+                    mu_lgASD = 1.62;
+                    sigma_lgASD = 0.25;
+                    mu_lgASA = -0.11*log10(1 + fc_eval) + 1.863;
+                    sigma_lgASA = 0.12*log10(1 + fc_eval) + 0.059;
+                    mu_lgZSA = -0.15*log10(1 + fc_eval) + 1.387;
+                    sigma_lgZSA = -0.09*log10(1 + fc_eval) + 0.746;
+                end
+            else
+                obj.assertProcedureBSupported();
+            end
+
+            limits.delay = 2*10^(mu_lgDS + sigma_lgDS);
+            limits.AOA = 2*10^(mu_lgASA + sigma_lgASA);
+            limits.AOD = 2*10^(mu_lgASD + sigma_lgASD);
+            limits.ZOA = 2*10^(mu_lgZSA + sigma_lgZSA);
+            limits.ZOD = 2*10^(obj.mu_lgZSD + obj.sigma_lgZSD);
+        end
+
+        function uniform_values = drawProcedureBUniform(obj, field_name, count)
+            uniform_values = rand(1, count);
+            if ~obj.isSpatialConsistencyProcedureB()
+                return;
+            end
+
+            [external_values, isAvailable] = obj.getExternalProcedureBRaw(field_name, count);
+            if isAvailable
+                uniform_values = external_values;
+            else
+                obj.warnSpatialConsistencyFallback();
+            end
+        end
+
+        function gaussian_values = drawProcedureBGaussian(obj, field_name, count)
+            gaussian_values = randn(1, count);
+            if ~obj.isSpatialConsistencyProcedureB()
+                return;
+            end
+
+            [external_values, isAvailable] = obj.getExternalProcedureBRaw(field_name, count);
+            if isAvailable
+                gaussian_values = external_values;
+            else
+                obj.warnSpatialConsistencyFallback();
+            end
+        end
+
+        function [values, isAvailable] = getExternalProcedureBRaw(obj, field_name, count)
+            values = [];
+            isAvailable = false;
+            if isempty(obj.TX) || isempty(obj.RX) || isempty(obj.RX.ID)
+                return;
+            end
+
+            if ~isprop(obj.TX, 'SC_procB_raw') || isempty(obj.TX.SC_procB_raw)
+                return;
+            end
+
+            rxId = obj.RX.ID;
+            if rxId < 1 || numel(obj.TX.SC_procB_raw) < rxId
+                return;
+            end
+
+            proc_raw = obj.TX.SC_procB_raw(rxId);
+            if ~isfield(proc_raw, field_name)
+                return;
+            end
+
+            raw_values = proc_raw.(field_name);
+            if numel(raw_values) < count || any(~isfinite(raw_values(1:count)))
+                return;
+            end
+
+            values = raw_values(1:count);
+            isAvailable = true;
+        end
+
+        function raw_rand_vec = drawLspRawRandn(obj, vectorLength)
+            raw_rand_vec = randn(vectorLength, 1);
+            if ~obj.isSpatialConsistencyEnabled()
+                return;
+            end
+
+            [external_lsp, isAvailable] = obj.getExternalLspRaw(vectorLength);
+            if isAvailable
+                raw_rand_vec = external_lsp;
+            else
+                obj.warnSpatialConsistencyFallback();
+            end
+        end
+
+        function tf = isSpatialConsistencyEnabled(obj)
+            tf = isprop(obj.scenario, 'spatial_consistency_enable') && ...
+                obj.scenario.spatial_consistency_enable;
+        end
+
+        function tf = isSpatialConsistencyProcedureB(obj)
+            tf = isprop(obj.scenario, 'spatial_consistency_enable') && ...
+                obj.scenario.spatial_consistency_enable && ...
+                isprop(obj.scenario, 'spatial_consistency_procedure') && ...
+                strcmpi(obj.scenario.spatial_consistency_procedure, 'B');
+        end
+
+        function tf = isSpatialConsistencyProcedureA(obj)
+            tf = isprop(obj.scenario, 'spatial_consistency_enable') && ...
+                obj.scenario.spatial_consistency_enable && ...
+                isprop(obj.scenario, 'spatial_consistency_procedure') && ...
+                strcmpi(obj.scenario.spatial_consistency_procedure, 'A');
+        end
+
+        function tf = hasProcedureAState(obj)
+            state = obj.getProcedureAState();
+            tf = ~isempty(state) && isfield(state, 'time') && isfinite(state.time);
+        end
+
+        function state = getProcedureAState(obj)
+            state = [];
+            if isempty(obj.TX) || isempty(obj.RX) || isempty(obj.RX.ID) || ...
+                    ~isprop(obj.TX, 'SC_procA_comm_state') || isempty(obj.TX.SC_procA_comm_state)
+                return;
+            end
+
+            rxId = obj.RX.ID;
+            if rxId < 1 || numel(obj.TX.SC_procA_comm_state) < rxId
+                return;
+            end
+            candidate = obj.TX.SC_procA_comm_state(rxId);
+            if isstruct(candidate) && isfield(candidate, 'initialized') && candidate.initialized
+                state = candidate;
+            end
+        end
+
+        function saveProcedureAState(obj)
+            if isempty(obj.TX) || isempty(obj.RX) || isempty(obj.RX.ID) || ...
+                    ~isprop(obj.TX, 'SC_procA_comm_state')
+                return;
+            end
+
+            rxId = obj.RX.ID;
+            state = obj.makeProcedureAState();
+            if isempty(obj.TX.SC_procA_comm_state)
+                state_table = repmat(obj.emptyProcedureAState(), 1, rxId);
+            else
+                state_table = obj.alignProcedureAStateTable(obj.TX.SC_procA_comm_state);
+            end
+            if numel(state_table) < rxId
+                state_table(end+1:rxId) = repmat(obj.emptyProcedureAState(), 1, rxId - numel(state_table));
+            end
+            state_table(rxId) = state;
+            obj.TX.SC_procA_comm_state = state_table;
+            obj.TX.SC_time_nodes = unique([obj.TX.SC_time_nodes, obj.t]);
+        end
+
+        function state = makeProcedureAState(obj)
+            state = obj.emptyProcedureAState();
+            state.initialized = true;
+            state.time = obj.t;
+            state.tx_position = obj.TX.Position;
+            state.rx_position = obj.RX.Position;
+            state.tau_n = obj.tau_n;
+            if isempty(obj.tau_absolute)
+                state.tau_absolute = obj.d_3D/3e8 + obj.tau_n;
+            else
+                state.tau_absolute = obj.tau_absolute;
+            end
+            state.tau_prime = obj.tau_prime;
+            state.tau_order = obj.tau_order;
+            state.phi_prime_AOA = obj.procedureAPrimeFromRays(obj.phi_n_m_AOA, obj.phi_LOS_AOA, true);
+            state.phi_prime_AOD = obj.procedureAPrimeFromRays(obj.phi_n_m_AOD, obj.phi_LOS_AOD, true);
+            state.theta_prime_ZOA = obj.procedureAPrimeFromRays(obj.theta_n_m_ZOA, obj.theta_LOS_ZOA, false);
+            state.theta_prime_ZOD = obj.procedureAPrimeFromRays(obj.theta_n_m_ZOD, obj.theta_LOS_ZOD, false);
+            state.phi_LOS_AOA = obj.phi_LOS_AOA;
+            state.phi_LOS_AOD = obj.phi_LOS_AOD;
+            state.theta_LOS_ZOA = obj.theta_LOS_ZOA;
+            state.theta_LOS_ZOD = obj.theta_LOS_ZOD;
+            state.cluster_shadow_dB = obj.cluster_shadow_dB;
+            previous_state = obj.getProcedureAState();
+            state.procedureA_Xn = obj.procedureAXnFromState(previous_state, numel(state.tau_n));
+            state.procedureA_Xn_correlation_distance = obj.procedureAXnCorrelationDistance();
+        end
+
+        function state = emptyProcedureAState(obj) %#ok<MANU>
+            state = struct( ...
+                'initialized', false, ...
+                'time', nan, ...
+                'tx_position', nan(1,3), ...
+                'rx_position', nan(1,3), ...
+                'tau_n', [], ...
+                'tau_absolute', [], ...
+                'tau_prime', [], ...
+                'tau_order', [], ...
+                'phi_prime_AOA', [], ...
+                'phi_prime_AOD', [], ...
+                'theta_prime_ZOA', [], ...
+                'theta_prime_ZOD', [], ...
+                'phi_LOS_AOA', nan, ...
+                'phi_LOS_AOD', nan, ...
+                'theta_LOS_ZOA', nan, ...
+                'theta_LOS_ZOD', nan, ...
+                'cluster_shadow_dB', [], ...
+                'procedureA_Xn', [], ...
+                'procedureA_Xn_correlation_distance', nan);
+        end
+
+        function state_table = alignProcedureAStateTable(obj, state_table_in)
+            template = obj.emptyProcedureAState();
+            if isempty(state_table_in)
+                state_table = state_table_in;
+                return;
+            end
+
+            state_table = repmat(template, 1, numel(state_table_in));
+            field_names = fieldnames(template);
+            for idx = 1:numel(state_table_in)
+                for field_idx = 1:numel(field_names)
+                    field_name = field_names{field_idx};
+                    if isfield(state_table_in(idx), field_name)
+                        state_table(idx).(field_name) = state_table_in(idx).(field_name);
+                    end
+                end
+            end
+        end
+
+        function prime_angles = procedureAPrimeFromRays(obj, ray_angles, los_angle, is_azimuth)
+            if isempty(ray_angles)
+                prime_angles = [];
+                return;
+            end
+
+            num_clusters = size(ray_angles, 1);
+            prime_angles = nan(1, num_clusters);
+            for cluster_idx = 1:num_clusters
+                angles = ray_angles(cluster_idx, :);
+                angles = angles(isfinite(angles));
+                if isempty(angles)
+                    continue;
+                end
+                if is_azimuth
+                    cluster_angle = angle(sum(exp(1j * deg2rad(angles)))) * 180/pi;
+                    prime_angles(cluster_idx) = obj.wrapAzimuthAngles(cluster_angle - los_angle);
+                else
+                    cluster_angle = mean(angles);
+                    prime_angles(cluster_idx) = cluster_angle - los_angle;
+                end
+            end
+        end
+
+        function unit_vec = unitVectorFromAngles(obj, azimuth_deg, zenith_deg) %#ok<INUSL>
+            unit_vec = [ ...
+                sind(zenith_deg) * cosd(azimuth_deg), ...
+                sind(zenith_deg) * sind(azimuth_deg), ...
+                cosd(zenith_deg)];
+        end
+
+        function [azimuth_new, zenith_new] = updateProcedureAAnglePair(obj, azimuth_prev, zenith_prev, velocity_vec, delay_vec, delta_t)
+            azimuth_new = azimuth_prev;
+            zenith_new = zenith_prev;
+            if delta_t <= 0 || all(velocity_vec(:) == 0)
+                return;
+            end
+
+            for cluster_idx = 1:numel(azimuth_prev)
+                delay_value = delay_vec(cluster_idx);
+                if ~isfinite(delay_value) || delay_value <= 0
+                    continue;
+                end
+                if size(velocity_vec, 1) == 1
+                    cluster_velocity = velocity_vec;
+                else
+                    cluster_velocity = velocity_vec(cluster_idx, :);
+                end
+                if all(cluster_velocity == 0)
+                    continue;
+                end
+
+                phi_rad = deg2rad(azimuth_prev(cluster_idx));
+                theta_rad = deg2rad(zenith_prev(cluster_idx));
+                sin_theta = max(abs(sin(theta_rad)), 1e-6);
+                phi_hat = [-sin(phi_rad), cos(phi_rad), 0];
+                theta_hat = [cos(theta_rad)*cos(phi_rad), cos(theta_rad)*sin(phi_rad), -sin(theta_rad)];
+
+                d_phi = dot(cluster_velocity, phi_hat) * delta_t / (3e8 * delay_value * sin_theta);
+                d_theta = dot(cluster_velocity, theta_hat) * delta_t / (3e8 * delay_value);
+                azimuth_new(cluster_idx) = azimuth_prev(cluster_idx) + rad2deg(d_phi);
+                zenith_new(cluster_idx) = zenith_prev(cluster_idx) + rad2deg(d_theta);
+            end
+
+            azimuth_new = obj.wrapAzimuthAngles(azimuth_new);
+            zenith_new = obj.wrapZenithAngles(zenith_new);
+        end
+
+        function [rx_velocity_eff, tx_velocity_eff] = procedureAEffectiveVelocities(obj, phi_AOA, theta_ZOA, phi_AOD, theta_ZOD, tx_velocity, rx_velocity, x_n, is_los)
+            num_clusters = numel(phi_AOA);
+            rx_velocity_eff = zeros(num_clusters, 3);
+            tx_velocity_eff = zeros(num_clusters, 3);
+            for cluster_idx = 1:num_clusters
+                if is_los
+                    rx_velocity_eff(cluster_idx, :) = rx_velocity - tx_velocity;
+                    tx_velocity_eff(cluster_idx, :) = tx_velocity - rx_velocity;
+                    continue;
+                end
+
+                mirror_matrix = diag([1, x_n(cluster_idx), 1]);
+                phi_aoa = deg2rad(phi_AOA(cluster_idx));
+                phi_aod = deg2rad(phi_AOD(cluster_idx));
+                theta_zoa = deg2rad(theta_ZOA(cluster_idx));
+                theta_zod = deg2rad(theta_ZOD(cluster_idx));
+                R_rx = obj.rotationZ(phi_aod + pi) * obj.rotationY(pi/2 - theta_zod) * ...
+                    mirror_matrix * obj.rotationY(pi/2 - theta_zoa) * obj.rotationZ(-phi_aoa);
+                R_tx = obj.rotationZ(-phi_aod) * obj.rotationY(pi/2 - theta_zod) * ...
+                    mirror_matrix * obj.rotationY(pi/2 - theta_zoa) * obj.rotationZ(phi_aoa + pi);
+                rx_velocity_eff(cluster_idx, :) = (R_rx * rx_velocity(:)).' - tx_velocity;
+                tx_velocity_eff(cluster_idx, :) = (R_tx * tx_velocity(:)).' - rx_velocity;
+            end
+        end
+
+        function x_n = procedureAXnFromState(obj, state, num_clusters)
+            [external_xn, is_available] = obj.getExternalProcedureAXn(num_clusters);
+            if is_available
+                x_n = external_xn;
+            elseif ~isempty(state) && isfield(state, 'procedureA_Xn') && numel(state.procedureA_Xn) >= num_clusters
+                x_n = state.procedureA_Xn(1:num_clusters);
+            else
+                x_n = obj.drawProcedureAXn(num_clusters);
+            end
+        end
+
+        function [x_n, is_available] = getExternalProcedureAXn(obj, num_clusters)
+            x_n = [];
+            is_available = false;
+            if isempty(obj.TX) || isempty(obj.RX) || isempty(obj.RX.ID) || ...
+                    ~isprop(obj.TX, 'SC_procA_comm_Xn') || isempty(obj.TX.SC_procA_comm_Xn)
+                return;
+            end
+
+            rxId = obj.RX.ID;
+            x_n_table = obj.TX.SC_procA_comm_Xn;
+            if rxId < 1 || size(x_n_table, 1) < rxId || size(x_n_table, 2) < num_clusters
+                return;
+            end
+
+            x_n = x_n_table(rxId, 1:num_clusters);
+            is_available = isnumeric(x_n) && all(isfinite(x_n));
+        end
+
+        function x_n = drawProcedureAXn(obj, num_clusters) %#ok<INUSL>
+            x_n = ones(1, num_clusters);
+            x_n(rand(1, num_clusters) < 0.5) = -1;
+        end
+
+        function corr_dist = procedureAXnCorrelationDistance(obj)
+            switch obj.scenario.name
+                case 'RMa'
+                    corr_dist = 60;
+                case {'UMa','UrbanGrid'}
+                    corr_dist = 50;
+                case 'UMi'
+                    corr_dist = 15;
+                case {'InH','InF'}
+                    corr_dist = 10;
+                otherwise
+                    corr_dist = nan;
+            end
+        end
+
+        function R = rotationZ(obj, alpha) %#ok<INUSL>
+            R = [cos(alpha), -sin(alpha), 0; ...
+                sin(alpha), cos(alpha), 0; ...
+                0, 0, 1];
+        end
+
+        function R = rotationY(obj, beta) %#ok<INUSL>
+            R = [cos(beta), 0, sin(beta); ...
+                0, 1, 0; ...
+                -sin(beta), 0, cos(beta)];
+        end
+
+        function velocity_vec = velocityVector(obj, node) %#ok<INUSL>
+            velocity_vec = [0, 0, 0];
+            if isempty(node) || ~isprop(node, 'velocity') || isempty(node.velocity)
+                return;
+            end
+            velocity_vec = node.velocity * [cosd(node.phi_v), sind(node.phi_v), cosd(node.theta_v)];
+        end
+
+        function [external_lsp, isAvailable] = getExternalLspRaw(obj, vectorLength)
+            external_lsp = [];
+            isAvailable = false;
+            if isempty(obj.TX) || isempty(obj.RX) || isempty(obj.RX.ID)
+                return;
+            end
+
+            field_name = obj.lspRawFieldName();
+            if ~isprop(obj.TX, field_name) || isempty(obj.TX.(field_name))
+                return;
+            end
+
+            rxId = obj.RX.ID;
+            lsp_table = obj.TX.(field_name);
+            if rxId < 1 || rxId > size(lsp_table, 2) || vectorLength > size(lsp_table, 1)
+                return;
+            end
+
+            external_lsp = lsp_table(1:vectorLength, rxId);
+            isAvailable = isnumeric(external_lsp) && all(isfinite(external_lsp));
+        end
+
+        function field_name = lspRawFieldName(obj)
+            if obj.O2I
+                field_name = 'LSP_raw_O2I';
+            elseif obj.LOS
+                field_name = 'LSP_raw_LOS';
+            else
+                field_name = 'LSP_raw_NLOS';
+            end
+        end
+
+        function warnSpatialConsistencyFallback(~)
+            persistent warned
+            if isempty(warned)
+                warning('CommChannel:SpatialConsistencyFallback', ...
+                    'Spatial consistency LSPs were not applied successfully; falling back to random LSPs.');
+                warned = true;
+            end
+        end
+
+        function angles = wrapAzimuthAngles(~, angles)
+            angles = mod(angles, 360);
+            angles = angles - 360*floor(angles/180);
+        end
+
+        function angles = wrapZenithAngles(~, angles)
+            wrapped = mod((angles + 360), 360);
+            over_half_circle = ((wrapped <= 360) & (wrapped >= 180));
+            angles = (~over_half_circle).*wrapped + over_half_circle.*(360 - wrapped);
         end
 
         function [rn1, rn2, rn3] = drawCouplingSeeds(obj)
