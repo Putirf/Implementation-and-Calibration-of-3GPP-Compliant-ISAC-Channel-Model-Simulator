@@ -1,0 +1,987 @@
+function result = calibration_spatial_consistency_config1(options)
+%CALIBRATION_SPATIAL_CONSISTENCY_CONFIG1
+% Config1 spatial-consistency calibration from TR 38.901 Table 7.8-5.
+%
+% Configuration:
+%   UMi-street Canyon, 30 GHz, 100%% indoor UTs, first floor, stationary
+%   UTs, Clause 7.5 + Clause 7.6.3.1 drop-based spatial consistency, with
+%   all UE-pair permutations binned by horizontal distance.
+%
+% Metrics:
+%   1) serving-cell coupling-loss CDF
+%   2) serving-cell wideband SINR CDF from CRS-port-0 RSRP
+%   3) delay correlation of cluster 3 versus UE distance
+%   4) AOA correlation of cluster 3 versus UE distance
+%   5) LOS/NLOS correlation versus UE distance
+%   6) complex channel-response correlation versus UE distance
+%
+% The default values are a smoke test. Increase num_drops, num_ue and
+% num_channel_realizations for production calibration.
+
+if nargin < 1 || isempty(options)
+    options = struct();
+end
+options = localDefaultOptions(options);
+rng(options.rng_seed, 'twister');
+
+scenario = comm_scenario.UMi;
+scenario.layer_num = 1;
+scenario.BS_sec_num = 3;
+scenario.UE_sec_num = 1;
+scenario.UE_per_sec = options.num_ue;
+scenario.ST_per_cell = 0;
+scenario.RP_per_equipment = 0;
+scenario.applyIsacFrequencyPreset('ISAC_FR2');
+scenario.frequency = 30e9;
+% TR 38.901 Tables 7.8-1/7.8-2 assumptions inherited by Table 7.8-5.
+scenario.BS_Tx_power = 35;
+scenario.BW = 100e6;
+scenario.spatial_consistency_enable = true;
+% Config1 is a stationary, drop-based spatial-consistency calibration.
+% It uses the Clause 7.5 fast-fading steps and the correlated random
+% variables prepared below; it is not the mobility Procedure B.
+scenario.spatial_consistency_procedure = 'drop';
+
+[BS_list, BS_sector_list] = localDropSingleBs(scenario, [0 0 scenario.BS_height]);
+BS = BS_list(1);
+scenario.total_BS_sector_num = numel(BS_sector_list);
+
+bin_edges = 0:options.distance_bin_width:options.distance_max_m;
+% Label each Table 7.8-5 distance range by its lower edge. For a 2 m
+% width, [0,2), [2,4), ... are therefore plotted at 0, 2, ... m.
+bin_centers = bin_edges(1:end-1);
+num_bins = numel(bin_centers);
+
+coupling_loss = nan(options.num_drops * options.num_ue, 1);
+sinr_db = nan(options.num_drops * options.num_ue, 1);
+pair_count = zeros(1, num_bins);
+self_pair_count = zeros(1, num_bins);
+delay_i = cell(1, num_bins); delay_j = cell(1, num_bins);
+aoa_i = cell(1, num_bins); aoa_j = cell(1, num_bins);
+aoa_wrapped_i = cell(1, num_bins); aoa_wrapped_j = cell(1, num_bins);
+aoa_offset_i = cell(1, num_bins); aoa_offset_j = cell(1, num_bins);
+los_aoa_i = cell(1, num_bins); los_aoa_j = cell(1, num_bins);
+aoa_sign_i = cell(1, num_bins); aoa_sign_j = cell(1, num_bins);
+aoa_magnitude_i = cell(1, num_bins); aoa_magnitude_j = cell(1, num_bins);
+aoa_jitter_i = cell(1, num_bins); aoa_jitter_j = cell(1, num_bins);
+cluster3_same_id_count = zeros(1, num_bins);
+los_i = cell(1, num_bins); los_j = cell(1, num_bins);
+channel_pair_stats = localEmptyPairComplexStats(num_bins);
+drop_layout = [];
+progress_bar = localCreateProgressBar(options, scenario);
+progress_cleanup = onCleanup(@()localCloseProgressBar(progress_bar)); %#ok<NASGU>
+
+for drop_idx = 1:options.num_drops
+    fprintf('Config1 drop %d/%d\n', drop_idx, options.num_drops);
+    [UE_list, ue_positions] = localDropIndoorFirstFloorUes( ...
+        BS, BS_sector_list, scenario, options.num_ue);
+    initial_ray_stream = localRayStream(options.rng_seed, drop_idx, 0);
+    localAssignDropRandomFields(BS, UE_list, scenario, initial_ray_stream, ...
+        options.ray_correlation_distance_m);
+
+    % Channel construction consumes MATLAB's global random stream even
+    % when the drop-based external fields are supplied. Preserve the stream
+    % here so Metric 6 cannot change the drops used by Metrics 1--5.
+    metric_rng_state = rng;
+
+    if options.plot_scene && drop_idx == 1
+        localPlotScene(BS_list, UE_list, scenario);
+    end
+    if isempty(drop_layout)
+        drop_layout = ue_positions;
+    end
+
+    serving_idx = nan(1, options.num_ue);
+    cluster3_idx = nan(1, options.num_ue);
+    delay3 = nan(1, options.num_ue);
+    aoa3 = nan(1, options.num_ue);
+    aoa3_wrapped = nan(1, options.num_ue);
+    aoa3_offset = nan(1, options.num_ue);
+    los_aoa = nan(1, options.num_ue);
+    cluster3_original_id = nan(1, options.num_ue);
+    aoa3_sign = nan(1, options.num_ue);
+    aoa3_magnitude = nan(1, options.num_ue);
+    aoa3_jitter = nan(1, options.num_ue);
+    los_flag = nan(1, options.num_ue);
+
+    for ue_idx = 1:options.num_ue
+        [link, serving_idx(ue_idx), coupling_loss((drop_idx-1)*options.num_ue+ue_idx), ...
+            sinr_db((drop_idx-1)*options.num_ue+ue_idx)] = ...
+            localSelectServingSector(BS, BS_sector_list, UE_list(ue_idx), scenario, options);
+        % Table 7.8-5 refers to cluster n = 3 after the Step-5 delay
+        % sorting.  Do not map this back to the pre-sort random-field ID.
+        cluster3_idx(ue_idx) = localSortedClusterActiveIndex(link, 3);
+        [~, delay3(ue_idx), aoa3(ue_idx)] = localThirdClusterValues( ...
+            link, cluster3_idx(ue_idx));
+        los_aoa(ue_idx) = link.phi_LOS_AOA;
+        if isfinite(cluster3_idx(ue_idx))
+            active_idx = round(cluster3_idx(ue_idx));
+            if isprop(link,'phi_n_AOA_cluster') && ...
+                    numel(link.phi_n_AOA_cluster) >= active_idx
+                aoa3_wrapped(ue_idx) = link.phi_n_AOA_cluster(active_idx);
+            end
+            aoa3_offset(ue_idx) = aoa3(ue_idx) - los_aoa(ue_idx);
+            if numel(link.tau_order) >= 3
+                cluster3_original_id(ue_idx) = link.tau_order(3);
+            end
+            if isprop(link,'AOA_sign_cluster') && ...
+                    numel(link.AOA_sign_cluster) >= active_idx
+                aoa3_sign(ue_idx) = link.AOA_sign_cluster(active_idx);
+            end
+            if isprop(link,'AOA_magnitude_cluster') && ...
+                    numel(link.AOA_magnitude_cluster) >= active_idx
+                aoa3_magnitude(ue_idx) = link.AOA_magnitude_cluster(active_idx);
+            end
+            if isprop(link,'AOA_jitter_cluster') && ...
+                    numel(link.AOA_jitter_cluster) >= active_idx
+                aoa3_jitter(ue_idx) = link.AOA_jitter_cluster(active_idx);
+            end
+        end
+        % Metric 5 correlates the final binary LOS/NLOS status.
+        los_flag(ue_idx) = double(link.LOS);
+    end
+
+    % Metric 6: keep each stationary pair fixed and regenerate only the
+    % random realization. Drop-based spatial fields remain position-fixed.
+    h = complex(nan(options.num_channel_realizations, options.num_ue));
+    for realization_idx = 1:options.num_channel_realizations
+        % A channel realization is a new ray-level spatial random field.
+        % All UEs sample the same field realization at their own positions,
+        % so nearby UEs receive similar Step 8--10 variables.
+        ray_stream = localRayStream(options.rng_seed, drop_idx, realization_idx);
+        localRefreshDropRayFields(BS, UE_list, ...
+            options.ray_correlation_distance_m, 20, 20, ray_stream);
+        for ue_idx = 1:options.num_ue
+            BS.sector = BS_sector_list(serving_idx(ue_idx));
+            link = channel.Comm_channel(BS, UE_list(ue_idx), scenario, true, 0);
+            h(realization_idx, ue_idx) = localSelectedComplexResponse(link);
+        end
+    end
+    rng(metric_rng_state);
+
+    % Include each UE's self-correlation in the first distance range, as
+    % requested for the d = 0 anchor. For a 1 m bin this is [0,1) m.
+    % Keep a separate count so true UE-to-UE pairs remain auditable.
+    first_bin = 1;
+    self_pair_count(first_bin) = self_pair_count(first_bin) + options.num_ue;
+    pair_count(first_bin) = pair_count(first_bin) + options.num_ue;
+    delay_i{first_bin}(end+(1:options.num_ue),1) = delay3(:); %#ok<AGROW>
+    delay_j{first_bin}(end+(1:options.num_ue),1) = delay3(:); %#ok<AGROW>
+    aoa_i{first_bin}(end+(1:options.num_ue),1) = aoa3(:); %#ok<AGROW>
+    aoa_j{first_bin}(end+(1:options.num_ue),1) = aoa3(:); %#ok<AGROW>
+    aoa_wrapped_i{first_bin}(end+(1:options.num_ue),1) = aoa3_wrapped(:); %#ok<AGROW>
+    aoa_wrapped_j{first_bin}(end+(1:options.num_ue),1) = aoa3_wrapped(:); %#ok<AGROW>
+    aoa_offset_i{first_bin}(end+(1:options.num_ue),1) = aoa3_offset(:); %#ok<AGROW>
+    aoa_offset_j{first_bin}(end+(1:options.num_ue),1) = aoa3_offset(:); %#ok<AGROW>
+    los_aoa_i{first_bin}(end+(1:options.num_ue),1) = los_aoa(:); %#ok<AGROW>
+    los_aoa_j{first_bin}(end+(1:options.num_ue),1) = los_aoa(:); %#ok<AGROW>
+    aoa_sign_i{first_bin}(end+(1:options.num_ue),1) = aoa3_sign(:); %#ok<AGROW>
+    aoa_sign_j{first_bin}(end+(1:options.num_ue),1) = aoa3_sign(:); %#ok<AGROW>
+    aoa_magnitude_i{first_bin}(end+(1:options.num_ue),1) = aoa3_magnitude(:); %#ok<AGROW>
+    aoa_magnitude_j{first_bin}(end+(1:options.num_ue),1) = aoa3_magnitude(:); %#ok<AGROW>
+    aoa_jitter_i{first_bin}(end+(1:options.num_ue),1) = aoa3_jitter(:); %#ok<AGROW>
+    aoa_jitter_j{first_bin}(end+(1:options.num_ue),1) = aoa3_jitter(:); %#ok<AGROW>
+    cluster3_same_id_count(first_bin) = cluster3_same_id_count(first_bin) + ...
+        sum(isfinite(cluster3_original_id));
+    los_i{first_bin}(end+(1:options.num_ue),1) = los_flag(:); %#ok<AGROW>
+    los_j{first_bin}(end+(1:options.num_ue),1) = los_flag(:); %#ok<AGROW>
+    for ue_idx = 1:options.num_ue
+        channel_pair_stats = localAccumulatePairComplexStats( ...
+            channel_pair_stats, first_bin, h(:,ue_idx), h(:,ue_idx));
+    end
+
+    pair_idx = nchoosek(1:options.num_ue, 2);
+    for pair_idx_row = 1:size(pair_idx, 1)
+        i = pair_idx(pair_idx_row, 1);
+        j = pair_idx(pair_idx_row, 2);
+        distance = norm(ue_positions(i, 1:2) - ue_positions(j, 1:2));
+        bin_idx = floor(distance / options.distance_bin_width) + 1;
+        if bin_idx < 1 || bin_idx > num_bins
+            continue;
+        end
+
+        pair_count(bin_idx) = pair_count(bin_idx) + 1;
+        delay_i{bin_idx}(end+1,1) = delay3(i); %#ok<AGROW>
+        delay_j{bin_idx}(end+1,1) = delay3(j); %#ok<AGROW>
+        aoa_i{bin_idx}(end+1,1) = aoa3(i); %#ok<AGROW>
+        aoa_j{bin_idx}(end+1,1) = aoa3(j); %#ok<AGROW>
+        aoa_wrapped_i{bin_idx}(end+1,1) = aoa3_wrapped(i); %#ok<AGROW>
+        aoa_wrapped_j{bin_idx}(end+1,1) = aoa3_wrapped(j); %#ok<AGROW>
+        aoa_offset_i{bin_idx}(end+1,1) = aoa3_offset(i); %#ok<AGROW>
+        aoa_offset_j{bin_idx}(end+1,1) = aoa3_offset(j); %#ok<AGROW>
+        los_aoa_i{bin_idx}(end+1,1) = los_aoa(i); %#ok<AGROW>
+        los_aoa_j{bin_idx}(end+1,1) = los_aoa(j); %#ok<AGROW>
+        aoa_sign_i{bin_idx}(end+1,1) = aoa3_sign(i); %#ok<AGROW>
+        aoa_sign_j{bin_idx}(end+1,1) = aoa3_sign(j); %#ok<AGROW>
+        aoa_magnitude_i{bin_idx}(end+1,1) = aoa3_magnitude(i); %#ok<AGROW>
+        aoa_magnitude_j{bin_idx}(end+1,1) = aoa3_magnitude(j); %#ok<AGROW>
+        aoa_jitter_i{bin_idx}(end+1,1) = aoa3_jitter(i); %#ok<AGROW>
+        aoa_jitter_j{bin_idx}(end+1,1) = aoa3_jitter(j); %#ok<AGROW>
+        if isfinite(cluster3_original_id(i)) && ...
+                cluster3_original_id(i) == cluster3_original_id(j)
+            cluster3_same_id_count(bin_idx) = ...
+                cluster3_same_id_count(bin_idx) + 1;
+        end
+        los_i{bin_idx}(end+1,1) = los_flag(i); %#ok<AGROW>
+        los_j{bin_idx}(end+1,1) = los_flag(j); %#ok<AGROW>
+        % The calibration channel response is defined on one CRS port of
+        % one serving sector. Do not mix responses from different sectors
+        % in the same complex-correlation population.
+        if serving_idx(i) == serving_idx(j)
+            channel_pair_stats = localAccumulatePairComplexStats( ...
+                channel_pair_stats, bin_idx, h(:,i), h(:,j));
+        end
+    end
+    localUpdateProgressBar(progress_bar, drop_idx, options.num_drops, scenario);
+end
+
+result = struct();
+result.config = 'Config1';
+result.procedure = 'drop';
+result.scenario = scenario.name;
+result.frequency = scenario.frequency;
+result.num_drops = options.num_drops;
+result.num_ue_per_drop = options.num_ue;
+result.num_channel_realizations = options.num_channel_realizations;
+result.distance_edges_m = bin_edges;
+result.distance_m = bin_centers;
+result.pair_count = pair_count;
+result.self_pair_count = self_pair_count;
+result.distinct_ue_pair_count = pair_count - self_pair_count;
+result.coupling_loss_db = coupling_loss(isfinite(coupling_loss));
+result.sinr_db = sinr_db(isfinite(sinr_db));
+result.cdf_coupling_loss = localCdf(result.coupling_loss_db);
+result.cdf_sinr = localCdf(result.sinr_db);
+result.xcorr_delay = localBinnedCorrelation(delay_i, delay_j);
+% Table 7.8-5 specifies the actual AOA of cluster 3.  AOA is periodic, so
+% applying ordinary Pearson correlation directly to [-180,180) values
+% creates an artificial discontinuity at the wrap boundary.  Use a
+% circular--circular coefficient on the actual wrapped nominal AOA; no
+% internal random variable or benchmark-fitted quantity replaces it.
+result.xcorr_aoa = localBinnedCircularCorrelation( ...
+    aoa_wrapped_i, aoa_wrapped_j);
+result.metric4_diagnostics = struct();
+result.metric4_diagnostics.xcorr_unwrapped_absolute_aoa = ...
+    localBinnedCorrelation(aoa_i, aoa_j);
+result.metric4_diagnostics.xcorr_wrapped_aoa = ...
+    localBinnedCorrelation(aoa_wrapped_i, aoa_wrapped_j);
+result.metric4_diagnostics.xcorr_los_aoa = ...
+    localBinnedCorrelation(los_aoa_i, los_aoa_j);
+result.metric4_diagnostics.xcorr_aoa_offset = ...
+    localBinnedCorrelation(aoa_offset_i, aoa_offset_j);
+result.metric4_diagnostics.xcorr_sign = ...
+    localBinnedCorrelation(aoa_sign_i, aoa_sign_j);
+result.metric4_diagnostics.xcorr_magnitude = ...
+    localBinnedCorrelation(aoa_magnitude_i, aoa_magnitude_j);
+result.metric4_diagnostics.xcorr_jitter = ...
+    localBinnedCorrelation(aoa_jitter_i, aoa_jitter_j);
+result.metric4_diagnostics.cluster3_same_original_id_fraction = ...
+    cluster3_same_id_count ./ max(pair_count, 1);
+result.xcorr_los = localBinnedCorrelation(los_i, los_j);
+result.xcorr_channel_response = ...
+    localDebiasedPairComplexCorrelation(channel_pair_stats);
+result.channel_response_sample_count = channel_pair_stats.sample_count;
+result.channel_response_pair_count = channel_pair_stats.pair_count;
+result.channel_response_self_pair_count = self_pair_count;
+result.xcorr_channel_response_raw_mean_abs = ...
+    localPairComplexRawMean(channel_pair_stats);
+result.drop_layout_first = drop_layout;
+result.options = options;
+benchmark = localLoadConfig1Benchmarks(options.benchmark_xlsx);
+result.validation = localBenchmarkValidation(result, benchmark);
+
+if options.save_results
+    if ~exist(options.output_dir, 'dir')
+        mkdir(options.output_dir);
+    end
+    save(fullfile(options.output_dir, 'Config1_DropSC.mat'), 'result', '-v7.3');
+end
+if options.plot_results
+    localPlotResults(result, options, benchmark);
+end
+end
+
+function options = localDefaultOptions(options)
+defaults = struct('num_drops', 50, 'num_ue', 100, ...
+    'num_channel_realizations', 50, 'distance_bin_width', 1, ...
+    'ray_correlation_distance_m', 15, ...
+    'distance_max_m', 100, 'noise_figure_db', 9, 'rng_seed', 17, ...
+    'plot_scene', true, 'plot_results', true, 'save_results', true, ...
+    'show_progress', true, ...
+    'output_dir', fullfile(pwd, 'results', 'Config1_DropSC'), ...
+    'benchmark_xlsx', fullfile(fileparts(mfilename('fullpath')), ...
+        'Phase3SpatialConsistency_v15_Ericsson.xlsx'));
+names = fieldnames(defaults);
+for idx = 1:numel(names)
+    if ~isfield(options, names{idx}) || isempty(options.(names{idx}))
+        options.(names{idx}) = defaults.(names{idx});
+    end
+end
+if options.num_ue < 2 || options.num_drops < 1 || ...
+        options.num_channel_realizations < 2 || ...
+        options.ray_correlation_distance_m <= 0 || ...
+        options.distance_bin_width <= 0 || options.distance_max_m <= 0
+    error('Invalid Config1 calibration options.');
+end
+end
+
+function progress_bar = localCreateProgressBar(options, scenario)
+progress_bar = [];
+if ~options.show_progress
+    return;
+end
+try
+    progress_bar = waitbar(0, localProgressMessage(scenario, 0));
+catch
+    progress_bar = [];
+end
+end
+
+function localUpdateProgressBar(progress_bar, completed_drops, total_drops, scenario)
+if isempty(progress_bar) || ~isgraphics(progress_bar)
+    return;
+end
+fraction = completed_drops/max(total_drops, 1);
+waitbar(fraction, progress_bar, localProgressMessage(scenario, 100*fraction));
+end
+
+function message = localProgressMessage(scenario, percent)
+message = sprintf('(Config 1, 3D-UMi, %.0f GHz)  %.1f %%', ...
+    scenario.frequency/1e9, percent);
+end
+
+function localCloseProgressBar(progress_bar)
+if ~isempty(progress_bar) && isgraphics(progress_bar)
+    delete(progress_bar);
+end
+end
+
+function [BS_list, BS_sector_list] = localDropSingleBs(scenario, position)
+BS = elements.Equipment(scenario, 'BS');
+BS.ID = 1;
+BS.inital_Position = position;
+BS.Position = position;
+BS.cluster_wrapped = [0 0];
+BS.antenna_params = localBsAntennaParams();
+scenario.total_BS_sector_num = 1;
+
+BS.sector = [];
+BS_sector_list = [];
+for sector_idx = 1:BS.sector_num
+    sector = elements.Sector(BS);
+    sector.ID = [1 sector_idx sector_idx];
+    sector.equipment_type = 'BS';
+    sector.boresight = -90 + (360/BS.sector_num)*(sector_idx-1);
+    ang.alpha = sector.boresight; ang.beta = 0; ang.gamma = 0;
+    sector.antenna = antennas.antenna_array(BS.antenna_params, ang);
+    sector.antenna.attachedDevice = sector;
+    sector.antenna.attachedType = 'BS';
+    BS.sector = [BS.sector; sector]; %#ok<AGROW>
+    BS_sector_list = [BS_sector_list; sector]; %#ok<AGROW>
+end
+BS_list = BS;
+end
+
+function params = localBsAntennaParams()
+params = struct();
+params.array.Mg = 1; params.array.Ng = 2;
+params.array.dg_H = 2.5; params.array.dg_V = 2.5;
+params.panel.M = 4; params.panel.N = 4;
+params.panel.Kv = 4; params.panel.Kh = 4;
+params.panel.d_H = 0.5; params.panel.d_V = 0.5;
+params.panel.P = 2; params.panel.X_pol = [-45 45];
+params.panel.ele_downtilt = 102; params.panel.ele_panning = 0;
+params.panel.antenna_model = 'directional';
+params.pol_model = 'model-2';
+end
+
+function [UE_list, ue_pos_list] = localDropIndoorFirstFloorUes(BS, BS_sector_list, scenario, num_ue)
+UE_list = [];
+ue_pos_list = nan(num_ue, 3);
+for ue_idx = 1:num_ue
+    UE = elements.Equipment(scenario, 'UE');
+    UE.ID = ue_idx;
+    UE.fcin = scenario.frequency;
+    UE.Indoor = true;
+    UE.floor_num = 1;
+    UE.n_fl = 1;
+    UE.height = 1.5;
+    UE.d_2D_in = 0;
+    UE.O2IPL = 'low';
+    UE.O2Isigma = 0;
+    UE.carPL = [9 5];
+
+    sector = BS_sector_list(mod(ue_idx-1, numel(BS_sector_list))+1);
+    % Table 7.8-5 Config1: indoor UT dropping uses a 0 m minimum
+    % horizontal BS-UT distance.  Do not inherit UMi.m's outdoor default
+    % of 10 m for this calibration.
+    xy = network_layout.drop_in_hexagonUE( ...
+        BS.Position(1:2), scenario.R, 0, ...
+        sector.boresight, BS.sector_num);
+    UE.Position = [xy UE.height];
+    UE.inital_Position = UE.Position;
+
+    UE.rand_LoS = rand(1, 1);
+
+    ang.alpha = rand*360-180;
+    ang.beta = UE.antenna_params.beta;
+    ang.gamma = 0;
+    UE.sector.antenna = antennas.antenna_array(UE.antenna_params, ang);
+    UE.sector.antenna.attachedDevice = UE;
+    UE.sector.antenna.attachedType = 'UE';
+
+    UE_list = [UE_list; UE]; %#ok<AGROW>
+    ue_pos_list(ue_idx,:) = UE.Position;
+end
+end
+
+function localAssignDropRandomFields(BS, UE_list, scenario, ray_stream, ray_d_cor)
+num_ue = numel(UE_list);
+n_cluster = 20;
+empty = localEmptyDropRaw(n_cluster);
+BS.SC_procB_raw = repmat(empty, 1, num_ue);
+
+positions = reshape([UE_list.Position], 3, []).';
+
+% Clause 7.6.3.3: indoor distance is the minimum of two spatially
+% consistent U(0,25 m) fields with 25 m correlation distance. It must also
+% remain smaller than the total horizontal BS-UT distance.
+indoor_uniform = localCorrelatedUniform(positions(:,1:2), 25, 2);
+indoor_distance = scenario.UE_max_d_2D_indoor * ...
+    min(indoor_uniform(:,1), indoor_uniform(:,2));
+o2i_sigma = localCorrelatedGaussian(positions(:,1:2), 10, 1);
+for ue_idx = 1:num_ue
+    max_din = min(scenario.UE_max_d_2D_indoor, ...
+        max(norm(positions(ue_idx,1:2)-BS.Position(1:2))-0.01, 0));
+    UE_list(ue_idx).d_2D_in = min(indoor_distance(ue_idx), max_din);
+    % Clause 7.6.3.3: O2I penetration-loss deviation uses 10 m spatial
+    % correlation. Config1 retains its existing low-loss building type.
+    UE_list(ue_idx).O2Isigma = o2i_sigma(ue_idx);
+end
+
+field_names = {'tau','AOA','AOD','ZOA','ZOD'};
+cluster_gaussian = localCorrelatedGaussian( ...
+    positions(:,1:2), 15, (numel(field_names)+1)*n_cluster);
+for field_idx = 1:numel(field_names)
+    column_idx = (field_idx-1)*n_cluster + (1:n_cluster);
+    values = localGaussianToUniform(cluster_gaussian(:,column_idx));
+    for ue_idx = 1:num_ue
+        BS.SC_procB_raw(ue_idx).(field_names{field_idx}) = values(ue_idx,:);
+    end
+end
+% Clause 7.5 uses an independent Gaussian jitter term for each cluster
+% angle.  Correlate those cluster-specific terms over the same 15 m
+% UMi O2I distance while retaining their Gaussian marginal distribution.
+jitter_names = {'AOA_jitter','AOD_jitter','ZOA_jitter','ZOD_jitter'};
+for field_idx = 1:numel(jitter_names)
+    jitter = localCorrelatedGaussian(positions(:,1:2), 15, n_cluster);
+    for ue_idx = 1:num_ue
+        BS.SC_procB_raw(ue_idx).(jitter_names{field_idx}) = jitter(ue_idx,:);
+    end
+end
+shadow_idx = numel(field_names)*n_cluster + (1:n_cluster);
+shadow = cluster_gaussian(:,shadow_idx);
+for ue_idx = 1:num_ue
+    BS.SC_procB_raw(ue_idx).shadow = shadow(ue_idx,:);
+end
+
+% LOS/NLOS is also spatially correlated. Comm_channel indexes this field
+% by the BS site ID, which is one for this single-cell calibration.
+los_uniform = localCorrelatedUniform(positions(:,1:2), 50, 1);
+for ue_idx = 1:num_ue
+    UE_list(ue_idx).rand_LoS = los_uniform(ue_idx,1);
+end
+
+% LSP raw values are indexed by UE ID on the transmitter BS.  For UMi O2I,
+% Table 7.5-6 specifies separate horizontal correlation distances.  The
+% order must match Comm_channel.large_scale_para():
+%     [SF, DS, ASD, ASA, ZSD, ZSA].
+lsp_d_cor_m = [7, 10, 11, 17, 25, 25];
+lsp = zeros(num_ue, numel(lsp_d_cor_m));
+for param_idx = 1:numel(lsp_d_cor_m)
+    lsp(:,param_idx) = localCorrelatedGaussian( ...
+        positions(:,1:2), lsp_d_cor_m(param_idx), 1);
+end
+BS.LSP_raw_O2I = lsp.';
+localRefreshDropRayFields(BS, UE_list, ray_d_cor, n_cluster, 20, ray_stream);
+end
+
+function raw = localEmptyDropRaw(n_cluster)
+raw = struct('tau',nan(1,n_cluster),'AOA',nan(1,n_cluster), ...
+    'AOD',nan(1,n_cluster),'ZOA',nan(1,n_cluster), ...
+    'ZOD',nan(1,n_cluster),'shadow',nan(1,n_cluster), ...
+    'AOA_jitter',nan(1,n_cluster),'AOD_jitter',nan(1,n_cluster), ...
+    'ZOA_jitter',nan(1,n_cluster),'ZOD_jitter',nan(1,n_cluster), ...
+    'coupling1',nan(n_cluster,20),'coupling2',nan(n_cluster,20), ...
+    'coupling3',nan(n_cluster,20),'xpr',nan(n_cluster,20), ...
+    'phase',nan(n_cluster,20,4));
+end
+
+function localRefreshDropRayFields(BS, UE_list, d_cor, n_cluster, n_ray, random_stream)
+positions = reshape([UE_list.Position],3,[]).';
+num_ue = numel(UE_list);
+num_ray_values = n_cluster*n_ray;
+
+% All ray fields use the same spatial covariance.  Factor it once per
+% realization instead of repeating the same Cholesky decomposition five
+% times; the generated distributions and correlation model are unchanged.
+ray_gaussian = localCorrelatedGaussian(positions(:,1:2),d_cor, ...
+    8*num_ray_values,random_stream);
+coupling1 = localGaussianToUniform(ray_gaussian(:,1:num_ray_values));
+coupling2 = localGaussianToUniform(ray_gaussian(:,num_ray_values+(1:num_ray_values)));
+coupling3 = localGaussianToUniform(ray_gaussian(:,2*num_ray_values+(1:num_ray_values)));
+xpr = ray_gaussian(:,3*num_ray_values+(1:num_ray_values));
+phase = localGaussianToUniform(ray_gaussian(:,4*num_ray_values+(1:4*num_ray_values)));
+
+for ue_idx = 1:num_ue
+    BS.SC_procB_raw(ue_idx).coupling1 = reshape(coupling1(ue_idx,:),n_cluster,n_ray);
+    BS.SC_procB_raw(ue_idx).coupling2 = reshape(coupling2(ue_idx,:),n_cluster,n_ray);
+    BS.SC_procB_raw(ue_idx).coupling3 = reshape(coupling3(ue_idx,:),n_cluster,n_ray);
+    BS.SC_procB_raw(ue_idx).xpr = reshape(xpr(ue_idx,:),n_cluster,n_ray);
+    BS.SC_procB_raw(ue_idx).phase = reshape(phase(ue_idx,:),n_cluster,n_ray,4);
+end
+end
+
+function [serving_link, serving_idx, coupling_db, sinr_db] = ...
+    localSelectServingSector(BS, BS_sector_list, UE, scenario, options)
+num_sector = numel(BS_sector_list);
+rsrp_dbm = -inf(1,num_sector);
+coupling = nan(1,num_sector);
+for sector_idx = 1:num_sector
+    BS.sector = BS_sector_list(sector_idx);
+    link = channel.Comm_channel(BS, UE, scenario, true, 0);
+    coupling(sector_idx) = localScalarFullCouplingLoss(link);
+    rsrp_dbm(sector_idx) = BS.Power + coupling(sector_idx);
+end
+[~, serving_idx] = max(rsrp_dbm);
+BS.sector = BS_sector_list(serving_idx);
+serving_link = channel.Comm_channel(BS, UE, scenario, true, 0);
+coupling_db = coupling(serving_idx);
+
+interference_idx = true(1,num_sector);
+interference_idx(serving_idx) = false;
+noise_dbm = -174 + 10*log10(scenario.BW) + options.noise_figure_db;
+denominator_mw = sum(10.^(rsrp_dbm(interference_idx)/10),'omitnan') + 10^(noise_dbm/10);
+sinr_db = rsrp_dbm(serving_idx) - 10*log10(denominator_mw);
+end
+
+function coupling_db = localScalarFullCouplingLoss(link)
+pl_db = mean(link.PL(:),'omitnan');
+sf_db = mean(link.SF(:),'omitnan');
+if ~isfinite(pl_db) || ~isfinite(sf_db)
+    coupling_db = nan;
+    return;
+end
+if ~isempty(link.H_port0)
+    channel_power = sum(link.H_port0(:),'omitnan');
+else
+    channel_power = sum(link.H_fastfading(:),'omitnan');
+end
+if ~(isfinite(channel_power) && channel_power > 0)
+    channel_power_db = 0;
+else
+    channel_power_db = pow2db(channel_power);
+end
+rx_elements = max(1, mean(link.U(:),'omitnan'));
+rx_polarizations = max(1, link.RX.antenna_params.panel.P);
+coupling_db = -pl_db + sf_db + channel_power_db - ...
+    10*log10(rx_elements*rx_polarizations);
+coupling_db = double(coupling_db(1));
+end
+
+function active_idx = localSortedClusterActiveIndex(link, sorted_idx)
+active_idx = nan;
+% Cluster n is defined by the Step-5 delay-sorted order.  The Step-6 keep
+% mask is expressed in that same order; map a surviving sorted cluster to
+% its row in the filtered channel arrays.  If cluster n was removed by the
+% -25 dB rule, it contributes no sample to Metrics 3 and 4.
+if ~isscalar(sorted_idx) || ~isfinite(sorted_idx) || sorted_idx < 1
+    return;
+end
+sorted_idx = round(sorted_idx);
+
+candidate = sorted_idx;
+if ~isempty(link.keep)
+    keep = logical(link.keep(:).');
+    if sorted_idx > numel(keep) || ~keep(sorted_idx)
+        return;
+    end
+    candidate = sum(keep(1:sorted_idx));
+end
+
+if candidate >= 1 && candidate <= numel(link.tau_n) && ...
+        candidate <= numel(link.Pn)
+    active_idx = candidate;
+end
+end
+
+function [p,d,a] = localThirdClusterValues(link, active_idx)
+p = nan; d = nan; a = nan;
+if ~isscalar(active_idx) || ~isfinite(active_idx)
+    return;
+end
+active_idx = round(active_idx);
+if numel(link.Pn) < active_idx
+    return;
+end
+p = link.Pn(active_idx);
+if link.LOS && ~link.O2I && numel(link.tau_n_LOS) >= active_idx
+    d = link.tau_n_LOS(active_idx);
+elseif numel(link.tau_n) >= active_idx
+    d = link.tau_n(active_idx);
+end
+% Use the Step-7 nominal cluster AOA before azimuth wrapping.  Applying an
+% ordinary Pearson coefficient to [-180,180) values turns physically close
+% angles such as 179 and -179 degrees into a spurious 358-degree jump.
+if isprop(link,'phi_n_AOA_cluster_unwrapped') && ...
+        numel(link.phi_n_AOA_cluster_unwrapped) >= active_idx && ...
+        isfinite(link.phi_n_AOA_cluster_unwrapped(active_idx))
+    a = link.phi_n_AOA_cluster_unwrapped(active_idx);
+elseif isprop(link,'phi_n_AOA_cluster') && ...
+        numel(link.phi_n_AOA_cluster) >= active_idx && ...
+        isfinite(link.phi_n_AOA_cluster(active_idx))
+    a = link.phi_n_AOA_cluster(active_idx);
+elseif ~isempty(link.phi_n_m_AOA) && size(link.phi_n_m_AOA,1) >= active_idx
+    ray_aoa = link.phi_n_m_AOA(active_idx,:);
+    ray_aoa = ray_aoa(isfinite(ray_aoa));
+    if ~isempty(ray_aoa)
+        mean_phasor = mean(exp(1j*deg2rad(ray_aoa)));
+        if abs(mean_phasor) > eps
+            a = rad2deg(angle(mean_phasor));
+        end
+    end
+end
+end
+
+function h = localSelectedComplexResponse(link)
+if ~isprop(link, 'H_port0_complex') || isempty(link.H_port0_complex)
+    error(['Metric 6 requires H_port0_complex. Add the small export patch ', ...
+        'to +channel/Comm_channel.m before running Config1.']);
+end
+h = link.H_port0_complex(1);
+end
+
+function values = localCorrelatedUniform(positions, d_cor, n_value, random_stream)
+if nargin < 4
+    random_stream = [];
+end
+values = localGaussianToUniform(localCorrelatedGaussian( ...
+    positions,d_cor,n_value,random_stream));
+end
+
+function values = localGaussianToUniform(gaussian_values)
+values = 0.5*(1+erf(gaussian_values/sqrt(2)));
+values = min(max(values,eps),1-eps);
+end
+
+function values = localCorrelatedGaussian(positions, d_cor, n_value, random_stream)
+if nargin < 4
+    random_stream = [];
+end
+delta_x = positions(:,1)-positions(:,1).';
+delta_y = positions(:,2)-positions(:,2).';
+R = exp(-sqrt(delta_x.^2+delta_y.^2)/d_cor) + 1e-10*eye(size(positions,1));
+if isempty(random_stream)
+    innovations = randn(size(positions,1),n_value);
+else
+    innovations = randn(random_stream,size(positions,1),n_value);
+end
+values = chol(R,'lower')*innovations;
+end
+
+function random_stream = localRayStream(base_seed, drop_idx, realization_idx)
+% Deterministic ray-only stream: changing the number of Metric-6
+% realizations cannot move the global stream used for Metrics 1--5.
+seed = mod(double(base_seed) + 104729*double(drop_idx) + ...
+    1009*double(realization_idx), 2^32-1);
+random_stream = RandStream('mt19937ar','Seed',seed);
+end
+
+function rho = localBinnedCorrelation(x_cells, y_cells)
+rho = nan(1,numel(x_cells));
+for idx = 1:numel(x_cells)
+    x = x_cells{idx}; y = y_cells{idx};
+    valid = isfinite(x) & isfinite(y);
+    if sum(valid) >= 3
+        % Table 7.8-5 requests all permutations of UE pairs.  Include both
+        % (i,j) and (j,i), so the two Pearson marginals are identical and
+        % the result cannot depend on the arbitrary UE-ID ordering used by
+        % nchoosek.
+        x_symmetric = [x(valid); y(valid)];
+        y_symmetric = [y(valid); x(valid)];
+        if std(x_symmetric) > 0 && std(y_symmetric) > 0
+            rho(idx) = corr(x_symmetric,y_symmetric);
+        end
+    end
+end
+end
+
+function rho = localBinnedCircularCorrelation(x_cells, y_cells)
+% Jammalamadaka--Sarma circular correlation.  The coefficient is invariant
+% to adding any integer multiple of 360 degrees and therefore does not
+% mistake 179 and -179 degrees for widely separated directions.
+rho = nan(1,numel(x_cells));
+for idx = 1:numel(x_cells)
+    x = x_cells{idx}; y = y_cells{idx};
+    valid = isfinite(x) & isfinite(y);
+    if sum(valid) < 3
+        continue;
+    end
+
+    % Include both UE-pair permutations, matching the real-valued metric
+    % estimator and removing dependence on arbitrary UE-ID ordering.
+    x_rad = deg2rad([x(valid); y(valid)]);
+    y_rad = deg2rad([y(valid); x(valid)]);
+    mean_x = angle(mean(exp(1j*x_rad)));
+    mean_y = angle(mean(exp(1j*y_rad)));
+    x_centered = sin(x_rad-mean_x);
+    y_centered = sin(y_rad-mean_y);
+    denominator = sqrt(sum(x_centered.^2)*sum(y_centered.^2));
+    if denominator > eps
+        rho(idx) = sum(x_centered.*y_centered)/denominator;
+    end
+end
+end
+
+function cdf = localCdf(values)
+values = sort(values(isfinite(values)));
+cdf = struct('x',values,'p',100*(1:numel(values))/max(1,numel(values)));
+end
+
+function stats = localEmptyPairComplexStats(num_bins)
+stats = struct();
+stats.pair_count = zeros(1,num_bins);
+stats.sample_count = zeros(1,num_bins);
+stats.sum_abs_r = zeros(1,num_bins);
+stats.sum_debiased_r2 = zeros(1,num_bins);
+end
+
+function stats = localAccumulatePairComplexStats(stats, bin_idx, x, y)
+valid = isfinite(x) & isfinite(y);
+x = x(valid); y = y(valid);
+sample_count = numel(x);
+if sample_count < 3
+    return;
+end
+mean_x = mean(x);
+mean_y = mean(y);
+var_x = real(mean(abs(x).^2) - mean_x*conj(mean_x));
+var_y = real(mean(abs(y).^2) - mean_y*conj(mean_y));
+if var_x <= eps || var_y <= eps
+    return;
+end
+covariance = mean(x.*conj(y)) - mean_x*conj(mean_y);
+abs_r = min(abs(covariance)/sqrt(var_x*var_y),1);
+
+% Remove the finite-realization magnitude floor before combining the
+% per-pair correlations within a distance bin.
+bias_r2 = 1/(sample_count-1);
+debiased_r2 = (abs_r^2-bias_r2)/(1-bias_r2);
+stats.pair_count(bin_idx) = stats.pair_count(bin_idx) + 1;
+stats.sample_count(bin_idx) = stats.sample_count(bin_idx) + sample_count;
+stats.sum_abs_r(bin_idx) = stats.sum_abs_r(bin_idx) + abs_r;
+stats.sum_debiased_r2(bin_idx) = ...
+    stats.sum_debiased_r2(bin_idx) + debiased_r2;
+end
+
+function rho = localDebiasedPairComplexCorrelation(stats)
+rho = nan(size(stats.pair_count));
+valid = stats.pair_count > 0;
+mean_debiased_r2 = zeros(size(stats.pair_count));
+mean_debiased_r2(valid) = stats.sum_debiased_r2(valid) ./ ...
+    stats.pair_count(valid);
+rho(valid) = sqrt(max(mean_debiased_r2(valid),0));
+end
+
+function rho = localPairComplexRawMean(stats)
+rho = nan(size(stats.pair_count));
+valid = stats.pair_count > 0;
+rho(valid) = stats.sum_abs_r(valid)./stats.pair_count(valid);
+end
+
+function localPlotScene(BS_list, UE_list, scenario)
+bs_xy = reshape([BS_list.Position],3,[]).';
+ue_xy = reshape([UE_list.Position],3,[]).';
+figure('Name','Config1 drop-based spatial consistency scene');
+hold on; grid on; axis equal; view(0,90);
+scatter(ue_xy(:,1),ue_xy(:,2),16,[0.85 0.15 0.15],'filled');
+scatter(bs_xy(:,1),bs_xy(:,2),100,'kp','filled');
+xlabel('x (m)'); ylabel('y (m)');
+title(sprintf('Config1: %s, 30 GHz, indoor first-floor UE',scenario.name));
+end
+
+function localPlotResults(result, options, benchmark)
+figure('Name','Config1 drop-based spatial consistency calibration');
+tiledlayout(2,3,'TileSpacing','compact','Padding','compact');
+
+nexttile; hold on; grid on;
+localPlotBenchmarkCdf(benchmark.metric1, result.cdf_coupling_loss, ...
+    [0.00 0.35 0.85], 'Config1 simulation');
+xlabel('Coupling loss (dB)'); ylabel('CDF (%)'); title('Metric 1');
+nexttile; hold on; grid on;
+localPlotBenchmarkCdf(benchmark.metric2, result.cdf_sinr, ...
+    [0.00 0.35 0.85], 'Config1 simulation');
+xlabel('SINR (dB)'); ylabel('CDF (%)'); title('Metric 2');
+nexttile; hold on; grid on;
+localPlotBenchmarkDistance(benchmark.metric3, result.distance_m, ...
+    result.xcorr_delay, 'Config1 simulation', result.distance_edges_m(end));
+xlabel('UE distance (m)'); ylabel('Correlation'); title('Metric 3: delay');
+nexttile; hold on; grid on;
+localPlotBenchmarkDistance(benchmark.metric4, result.distance_m, ...
+    result.xcorr_aoa, 'Config1 simulation', result.distance_edges_m(end));
+xlabel('UE distance (m)'); ylabel('Correlation'); title('Metric 4: AOA');
+nexttile; hold on; grid on;
+localPlotBenchmarkDistance(benchmark.metric5, result.distance_m, ...
+    result.xcorr_los, 'Config1 simulation', result.distance_edges_m(end));
+xlabel('UE distance (m)'); ylabel('Correlation'); title('Metric 5: LOS/NLOS');
+nexttile; hold on; grid on;
+localPlotBenchmarkDistance(benchmark.metric6, result.distance_m, ...
+    result.xcorr_channel_response, 'Config1 simulation', result.distance_edges_m(end));
+xlabel('UE distance (m)'); ylabel('Correlation'); title('Metric 6: channel response');
+for tile_idx = 1:6
+    nexttile(tile_idx); legend('Location','best');
+end
+if options.save_results
+    exportgraphics(gcf,fullfile(options.output_dir,'Config1_DropSC_metrics.png'),'Resolution',180);
+end
+end
+
+function localPlotBenchmarkCdf(benchmark, simulation, color, simulation_name)
+if benchmark.available
+    for curve_idx = 1:size(benchmark.curves,2)
+        plot(benchmark.curves(:,curve_idx), benchmark.cdf, ...
+            'Color',[0.75 0.75 0.75], 'LineWidth',0.7, ...
+            'HandleVisibility','off');
+    end
+    plot(benchmark.mean_curve, benchmark.cdf, 'k-', 'LineWidth',2.0, ...
+        'DisplayName','benchmark mean');
+end
+if ~isempty(simulation.x)
+    plot(simulation.x, simulation.p, 'Color',color, 'LineWidth',1.2, ...
+        'DisplayName',simulation_name);
+end
+end
+
+function localPlotBenchmarkDistance(benchmark, simulation_x, simulation_y, ...
+        simulation_name, final_edge)
+if benchmark.available
+    for curve_idx = 1:size(benchmark.curves,2)
+        plot(benchmark.distance, benchmark.curves(:,curve_idx), ...
+            'Color',[0.75 0.75 0.75], 'LineWidth',0.7, ...
+            'HandleVisibility','off');
+    end
+    plot(benchmark.distance, benchmark.mean_curve, 'k-', 'LineWidth',2.0, ...
+        'DisplayName','benchmark mean');
+end
+valid = isfinite(simulation_x) & isfinite(simulation_y);
+if any(valid)
+    plot_x = simulation_x(valid);
+    plot_y = simulation_y(valid);
+    % The last lower-edge-labelled bin represents [x,end). Extend only the
+    % drawing to the final edge so a 2 m grid covers the full 0--100 m.
+    if nargin >= 5 && isfinite(final_edge) && plot_x(end) < final_edge
+        plot_x(end+1) = final_edge;
+        plot_y(end+1) = plot_y(end);
+    end
+    plot(plot_x, plot_y, 'Color',[0.00 0.35 0.85], ...
+        'LineWidth',1.2, 'DisplayName',simulation_name);
+end
+end
+
+function benchmark = localLoadConfig1Benchmarks(xlsx_path)
+empty = struct('available',false,'cdf',[],'distance',[],'curves',[],'mean_curve',[]);
+benchmark = struct('metric1',empty,'metric2',empty,'metric3',empty, ...
+    'metric4',empty,'metric5',empty,'metric6',empty);
+if isempty(xlsx_path) || ~isfile(xlsx_path)
+    return;
+end
+try
+    cdf = readmatrix(xlsx_path,'Sheet','Config1 (metric 1-2)', ...
+        'Range','A29:A129');
+    benchmark.metric1 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 1-2)', 'B29:L129', cdf, false);
+    benchmark.metric2 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 1-2)', 'AG29:AQ129', cdf, false);
+
+    distance = readmatrix(xlsx_path,'Sheet','Config1 (metric 3-6)', ...
+        'Range','A29:A129');
+    benchmark.metric3 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 3-6)', 'B29:K129', distance, true);
+    benchmark.metric4 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 3-6)', 'AG29:AP129', distance, true);
+    benchmark.metric5 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 3-6)', 'BL29:BU129', distance, true);
+    benchmark.metric6 = localReadBenchmarkBlock(xlsx_path, ...
+        'Config1 (metric 3-6)', 'CQ29:CZ129', distance, true);
+catch exception
+    warning('Config1:BenchmarkReadFailed', ...
+        'Could not read Config1 benchmark workbook: %s', exception.message);
+end
+end
+
+function benchmark = localReadBenchmarkBlock(xlsx_path, sheet_name, range, axis, is_distance)
+benchmark = struct('available',false,'cdf',[],'distance',[],'curves',[],'mean_curve',[]);
+curves = readmatrix(xlsx_path,'Sheet',sheet_name,'Range',range);
+axis = axis(:);
+valid_rows = isfinite(axis);
+valid_cols = sum(isfinite(curves),1) >= 2;
+if ~any(valid_rows) || ~any(valid_cols)
+    return;
+end
+axis = axis(valid_rows);
+curves = curves(valid_rows,valid_cols);
+if is_distance
+    % The spreadsheet stores correlation in percent; the simulation stores
+    % correlation in [0,1].
+    curves = curves/100;
+    benchmark.distance = axis;
+else
+    benchmark.cdf = axis;
+end
+benchmark.curves = curves;
+benchmark.mean_curve = mean(curves,2,'omitnan');
+benchmark.available = true;
+end
+
+function validation = localBenchmarkValidation(result, benchmark)
+validation = struct();
+validation.metric1 = localCdfValidation(result.cdf_coupling_loss, benchmark.metric1);
+validation.metric2 = localCdfValidation(result.cdf_sinr, benchmark.metric2);
+validation.metric3 = localDistanceValidation(result.distance_m, result.xcorr_delay, benchmark.metric3);
+validation.metric4 = localDistanceValidation(result.distance_m, result.xcorr_aoa, benchmark.metric4);
+validation.metric5 = localDistanceValidation(result.distance_m, result.xcorr_los, benchmark.metric5);
+validation.metric6 = localDistanceValidation(result.distance_m, result.xcorr_channel_response, benchmark.metric6);
+end
+
+function validation = localCdfValidation(simulation, benchmark)
+validation = struct('available',benchmark.available,'sim_quantiles',nan(1,3), ...
+    'benchmark_quantiles',nan(1,3),'median_error',nan);
+if ~benchmark.available || isempty(simulation.x)
+    return;
+end
+q = [10 50 90];
+validation.sim_quantiles = interp1(simulation.p,simulation.x,q,'linear','extrap');
+validation.benchmark_quantiles = interp1(benchmark.cdf,benchmark.mean_curve,q, ...
+    'linear','extrap');
+validation.median_error = validation.sim_quantiles(2) - validation.benchmark_quantiles(2);
+end
+
+function validation = localDistanceValidation(simulation_x, simulation_y, benchmark)
+validation = struct('available',benchmark.available,'sim_at_benchmark',[], ...
+    'benchmark_mean',[],'rmse',nan);
+if ~benchmark.available
+    return;
+end
+valid = isfinite(simulation_x) & isfinite(simulation_y);
+if sum(valid) < 2
+    return;
+end
+validation.sim_at_benchmark = interp1(simulation_x(valid),simulation_y(valid), ...
+    benchmark.distance,'linear',nan);
+validation.benchmark_mean = benchmark.mean_curve;
+valid = isfinite(validation.sim_at_benchmark) & isfinite(validation.benchmark_mean);
+if any(valid)
+    validation.rmse = sqrt(mean((validation.sim_at_benchmark(valid) - ...
+        validation.benchmark_mean(valid)).^2));
+end
+end
