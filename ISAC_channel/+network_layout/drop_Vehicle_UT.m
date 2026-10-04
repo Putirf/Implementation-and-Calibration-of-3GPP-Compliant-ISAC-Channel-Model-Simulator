@@ -44,10 +44,13 @@ function [veh_pos, side, lane_id, s_new, d_min] = drop_Vehicle_UT(scenario, vehi
     end
 
     % ---- geometry (centre-region size) ----
-    ISD   = scenario.ISD;
+    % TEMP UrbanGrid calibration: vehicle UE road width is independent from TRP ISD.
+    % Original state: ISD = scenario.ISD;
+    ISD   = scenario.grid_dx;
     laneW = scenario.Lanewidth;
 
-    dy = ISD * 433/250;
+    % dy = ISD * 433/250;
+    dy = scenario.grid_dy;
 
     roadTerm = 4*laneW;
     Lx = ISD - roadTerm;

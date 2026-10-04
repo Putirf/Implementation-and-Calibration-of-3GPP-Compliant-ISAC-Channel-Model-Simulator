@@ -4,7 +4,7 @@ classdef UAV < sensing_types.Sensing_type
         function obj = UAV(scenario)
             obj.sensing_type  = 'UAV';
             obj.RCS_model  = 1;
-            scenario.BS_ST_min_d = 0;
+            scenario.BS_ST_min_d = 0; 
             scenario.UE_ST_min_d = 0;
             scenario.subname = 'AV';
             scenario.alternative = 3;

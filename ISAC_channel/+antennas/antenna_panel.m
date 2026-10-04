@@ -11,6 +11,7 @@ classdef antenna_panel < handle
         X_pol
         ele_downtilt
         ele_panning
+        antenna_model = 'isotropic'
 
         attachedArray
         element_list
@@ -135,9 +136,12 @@ classdef antenna_panel < handle
         end
 
         function loadPanelConfig(obj, cfg)
-            fields = {'M', 'N', 'Kv', 'Kh', 'd_H', 'd_V', 'P', 'X_pol', 'ele_downtilt', 'ele_panning'};
+            fields = {'M', 'N', 'Kv', 'Kh', 'd_H', 'd_V', 'P', 'X_pol', ...
+                'ele_downtilt', 'ele_panning', 'antenna_model'};
             for idx = 1:numel(fields)
-                obj.(fields{idx}) = cfg.(fields{idx});
+                if isfield(cfg, fields{idx})
+                    obj.(fields{idx}) = cfg.(fields{idx});
+                end
             end
         end
 
@@ -157,6 +161,7 @@ classdef antenna_panel < handle
             for idx = 1:obj.P
                 elements(idx) = antennas.antenna_element(obj.X_pol(idx));
                 elements(idx).attachedPanel = obj;
+                elements(idx).antenna_model = obj.antenna_model;
                 if ~isempty(cfg) && isfield(cfg, 'pol_model')
                     elements(idx).pol_model = cfg.pol_model;
                 end

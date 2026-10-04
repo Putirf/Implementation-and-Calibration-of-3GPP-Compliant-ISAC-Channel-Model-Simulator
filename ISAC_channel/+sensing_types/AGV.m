@@ -5,23 +5,28 @@ classdef AGV < sensing_types.Sensing_type
         function obj = AGV()
             obj.sensing_type  = 'AGV';
             obj.RCS_model  = 2;
+            obj.dimensions = [0.5, 1.0, 0.5];
+            % The 1.5 m value in Table 7.9.6.1-4 is the terrestrial-UT
+            % height.  The single AGV SPST is located at the centre of the
+            % 0.5 m-high target, consistent with the single-SPST placement
+            % used for the other vehicle-shaped calibration targets.
+            obj.height = obj.dimensions(3)/2;
 
-            % ----- RCS parameters (Table 7.9.6.1-2, outdoor) model 2 -----
-            % left back right front roof  
-            % sigle STSP
+            % ----- RCS parameters (Tables 7.9.2.1-6 and 7.9.6.2-4) -----
+            % Single SPST parameter sets: front, left, back, right, roof.
             obj.RCS.sigma_M_dB        = -4.25;    % dBsm
             obj.RCS.sigma_M           = db2pow(obj.RCS.sigma_M_dB);    % dBsm
-            obj.RCS.sigma_D_dB        = 0;        % human: deterministic
+            obj.RCS.sigma_D_dB        = 0;        % replaced path-wise by the angular pattern
             obj.RCS.sigma_D           = db2pow(obj.RCS.sigma_D_dB);    % dBsm
             obj.RCS.sigma_sigma_S_dB  = 2.51;     % small-scale only
             obj.RCS.mu_sigma_S_dB     = -log(10) * obj.RCS.sigma_sigma_S_dB^2 / 20;
 
-            obj.sigle_STSP.phi_center          = [90,180,270,0,nan];
-            obj.sigle_STSP.phi_3dB             = [15.53,12.49,15.53,13.68,nan];
-            obj.sigle_STSP.theta_center        = [75,90,75,90,0];
-            obj.sigle_STSP.theta_3dB           = [20.03,11.89,20.03,13.68,11.44];
-            obj.sigle_STSP.G_max               = [7.33,11.01,7.33,13.02,11.79];
-            obj.sigle_STSP.sigma_max           = [17.6,21.28,17.6,23.29,22.06];
+            obj.sigle_STSP.phi_center          = [0,90,180,270,nan];
+            obj.sigle_STSP.phi_3dB             = [13.68,15.53,12.49,15.53,nan];
+            obj.sigle_STSP.theta_center        = [90,75,90,75,0];
+            obj.sigle_STSP.theta_3dB           = [13.68,20.03,11.89,20.03,11.44];
+            obj.sigle_STSP.G_max               = [13.02,7.33,11.01,7.33,11.79];
+            obj.sigle_STSP.sigma_max           = [23.29,17.60,21.28,17.60,22.06];
             obj.sigle_STSP.theta_range         = [30,180;30,180;30,180;30,180;0,30];
             obj.sigle_STSP.phi_range           = [-45,45;45,135;135,225;225,315;0,360];
 

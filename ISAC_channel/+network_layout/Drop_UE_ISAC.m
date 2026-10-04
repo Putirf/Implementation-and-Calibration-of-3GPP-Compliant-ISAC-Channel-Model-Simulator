@@ -2,8 +2,7 @@ function [UE_list, ue_pos_list,vehicle_list_center] = Drop_UE_ISAC(BS_list, scen
 UE_list = []; ue_pos_list = [];vehicle_list_center = [];
 lowhigh = {'low','high'};
 id      = 0;
-indoor = false;
-[plot_controller, Ue_pos] = localParseInputs(varargin{:});
+[plot_controller, Ue_pos, ue_environment] = localParseInputs(varargin{:});
 
 fc      = scenario.frequency;
 BW      = scenario.BW;
@@ -14,88 +13,53 @@ total_BS_sector_num = scenario.total_BS_sector_num;
 
 if isempty(Ue_pos)
     if strcmp(scenario.name,'UrbanGrid')
-        % Pedstrain UT
-        Pedstrain_UE_pos = network_layout.drop_Pedstrain_UT(scenario,1,[0,0]);
-        for uk = 1:16
-            Ue      = elements.Equipment(scenario,'UE');
-            id      = id + 1;
-            Ue.ID   = id;
-            Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
-            Ue.d_2D_in = zeros(1);
-            Ue.height     = 1.5;
-            Ue_pos_2D      = Pedstrain_UE_pos(uk,:);
-            Ue_pos_3D = [Ue_pos_2D, Ue.height];
-            Ue.inital_Position  = Ue_pos_3D;
-            Ue.Position = Ue_pos_3D;
-            Ue.rand_LoS = rand(1,total_BS_sector_num);
-
-            Ue.n_fl     = 1;
-            Ue.O2Isigma = 0;
-            Ue.carPL = [0,0]; % for metallized car windows, 米 = 20 can be used.
-            ang.alpha   = rand*360-180;
-            ang.beta = Ue.antenna_params.beta;
-            ang.gamma = 0;
-            Ue.sector.antenna  = antennas.antenna_array(Ue.antenna_params, ang);
-            Ue.sector.antenna.attachedDevice = Ue;
-            Ue.sector.antenna.attachedType   = 'UE-Pedstrain';
-            ue_pos_list = [ue_pos_list; Ue.Position]; %#ok<AGROW>
-            UE_list     = [UE_list;Ue]; %#ok<AGROW>
-        end
-
-        % RSU UT
-        RSU_pos = network_layout.drop_RSU_UT(scenario);
-        for uk = 1:(sqrt(numel(BS_list)/2)+1)^2
-            Ue      = elements.Equipment(scenario,'UE');
-            id      = id + 1;
-            Ue.ID   = id;
-            Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
-            Ue.d_2D_in = zeros(1);
-            Ue_pos_2D     = RSU_pos(uk,:);
-            Ue.height     = 5;
-            Ue_pos_3D = [Ue_pos_2D, Ue.height];
-            Ue.inital_Position  = Ue_pos_3D;
-            Ue.Position = Ue_pos_3D;
-            Ue.rand_LoS = rand(1,total_BS_sector_num);
-
-            Ue.n_fl     = 1;
-            Ue.O2Isigma = 0;
-            Ue.carPL = [0,0]; % for metallized car windows, 米 = 20 can be used.
-            
-            ang.alpha   = rand*360-180;
-            ang.beta = Ue.antenna_params.beta;
-            ang.gamma = 0;
-            Ue.sector.antenna  = antennas.antenna_array(Ue.antenna_params, ang);
-            Ue.sector.antenna.attachedDevice = Ue;
-            Ue.sector.antenna.attachedType   = 'UE-RSU';
-            ue_pos_list = [ue_pos_list; Ue.Position]; %#ok<AGROW>
-            UE_list     = [UE_list;Ue]; %#ok<AGROW>
-        end
-
-
-        % vehicle UT
-        for m = 1:numel(scenario.Centerposition)/2
-            vehicle_list = struct('s', [], 'lane_id', [],'pos',[],'grid_id',[]);
-            for uk = 1:scenario.vehicle_per_sec
+        if ismember("Pedestrian",scenario.user_case)
+            % Pedestrian UT
+            Pedestrian_UE_pos = network_layout.drop_Pedestrian_UT(scenario,1,[0,0]);
+            for uk = 1:16
                 Ue      = elements.Equipment(scenario,'UE');
                 id      = id + 1;
                 Ue.ID   = id;
                 Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
                 Ue.d_2D_in = zeros(1);
-                Ue.velocity = 60*3600/1000; % 60km/hr
-                [pos,side,lane_id, s]      = network_layout.drop_Vehicle_UT(scenario, vehicle_list, Ue.velocity, scenario.Centerposition(m,:),[],false);
-                if isempty(pos)   
-                    break;   
-                end
-                vehicle_list.lane_id(uk,1) = lane_id;
-                vehicle_list.s(uk,1) = s;
-                vehicle_list.pos(uk,:) = pos;
-                vehicle_list.grid_id(uk,1) = m;
-                Ue.height     = 1.6;
-                Ue_pos_3D = [pos, Ue.height];
-                Ue.phi_v = (side-1)*90;
+                Ue.height     = 1.5;
+                Ue_pos_2D      = Pedestrian_UE_pos(uk, 1:2);
+                Ue_pos_3D = [Ue_pos_2D, Ue.height];
                 Ue.inital_Position  = Ue_pos_3D;
                 Ue.Position = Ue_pos_3D;
                 Ue.rand_LoS = rand(1,total_BS_sector_num);
+
+                Ue.n_fl     = 1;
+                Ue.O2Isigma = 0;
+                Ue.carPL = [0,0]; % for metallized car windows, 米 = 20 can be used.
+                ang.alpha   = rand*360-180;
+                ang.beta = Ue.antenna_params.beta;
+                ang.gamma = 0;
+                Ue.sector.antenna  = antennas.antenna_array(Ue.antenna_params, ang);
+                Ue.sector.antenna.attachedDevice = Ue;
+                Ue.sector.antenna.attachedType   = 'UE-Pedestrian';
+                ue_pos_list = [ue_pos_list; Ue.Position]; %#ok<AGROW>
+                UE_list     = [UE_list;Ue]; %#ok<AGROW>
+            end
+        end
+        if ismember("RSU",scenario.user_case)
+            % RSU UT
+            RSU_pos = network_layout.drop_RSU_UT(scenario);
+            % TEMP UrbanGrid calibration: RSU count follows road-grid vertices, not BS grid count.
+            % Original state: for uk = 1:(sqrt(numel(BS_list)/2)+1)^2
+            for uk = 1:size(RSU_pos, 1)
+                Ue      = elements.Equipment(scenario,'UE');
+                id      = id + 1;
+                Ue.ID   = id;
+                Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
+                Ue.d_2D_in = zeros(1);
+                Ue_pos_2D     = RSU_pos(uk, 1:2);
+                Ue.height     = 5;
+                Ue_pos_3D = [Ue_pos_2D, Ue.height];
+                Ue.inital_Position  = Ue_pos_3D;
+                Ue.Position = Ue_pos_3D;
+                Ue.rand_LoS = rand(1,total_BS_sector_num);
+
                 Ue.n_fl     = 1;
                 Ue.O2Isigma = 0;
                 Ue.carPL = [0,0]; % for metallized car windows, 米 = 20 can be used.
@@ -105,33 +69,89 @@ if isempty(Ue_pos)
                 ang.gamma = 0;
                 Ue.sector.antenna  = antennas.antenna_array(Ue.antenna_params, ang);
                 Ue.sector.antenna.attachedDevice = Ue;
-                Ue.sector.antenna.attachedType   = 'UE-Vehicle';
+                Ue.sector.antenna.attachedType   = 'UE-RSU';
                 ue_pos_list = [ue_pos_list; Ue.Position]; %#ok<AGROW>
                 UE_list     = [UE_list;Ue]; %#ok<AGROW>
             end
-            if isequal(scenario.Centerposition(m,:), [0 0])
-                vehicle_list_center = vehicle_list;
+        end
+        if ismember("vehicle",scenario.user_case)
+            % vehicle UT
+            for m = 1:numel(scenario.Centerposition)/2
+                vehicle_list = struct('s', [], 'lane_id', [],'pos',[],'grid_id',[]);
+                for uk = 1:scenario.vehicle_per_sec
+                    Ue      = elements.Equipment(scenario,'UE');
+                    id      = id + 1;
+                    Ue.ID   = id;
+                    Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
+                    Ue.d_2D_in = zeros(1);
+                    Ue.velocity = 60*3600/1000; % 60km/hr
+                    [pos,side,lane_id, s]      = network_layout.drop_Vehicle_UT(scenario, vehicle_list, Ue.velocity, scenario.Centerposition(m,:),[],false);
+                    if isempty(pos)
+                        break;
+                    end
+                    vehicle_list.lane_id(uk,1) = lane_id;
+                    vehicle_list.s(uk,1) = s;
+                    vehicle_list.pos(uk,:) = pos;
+                    vehicle_list.grid_id(uk,1) = m;
+                    Ue.height     = 1.6;
+                    Ue_pos_3D = [pos(1:2), Ue.height];
+                    Ue.phi_v = (side-1)*90;
+                    Ue.inital_Position  = Ue_pos_3D;
+                    Ue.Position = Ue_pos_3D;
+                    Ue.rand_LoS = rand(1,total_BS_sector_num);
+                    Ue.n_fl     = 1;
+                    Ue.O2Isigma = 0;
+                    Ue.carPL = [0,0]; % for metallized car windows, 米 = 20 can be used.
+
+                    ang.alpha   = rand*360-180;
+                    ang.beta = Ue.antenna_params.beta;
+                    ang.gamma = 0;
+                    Ue.sector.antenna  = antennas.antenna_array(Ue.antenna_params, ang);
+                    Ue.sector.antenna.attachedDevice = Ue;
+                    Ue.sector.antenna.attachedType   = 'UE-Vehicle';
+                    ue_pos_list = [ue_pos_list; Ue.Position]; %#ok<AGROW>
+                    UE_list     = [UE_list;Ue]; %#ok<AGROW>
+                end
+                if isequal(scenario.Centerposition(m,:), [0 0])
+                    vehicle_list_center = vehicle_list;
+                end
             end
         end
 
     else
+        % TR 38.901 Table 7.9.6.1-1 UAV calibration: use 30
+        % terrestrial outdoor UTs, all uniformly dropped in the centre cell.
+        is_uav_calibration = strcmp(scenario.name, 'UMa') ...
+            && strcmp(scenario.subname, 'AV');
+        if is_uav_calibration
+            bs_indices = 1;
+            ue_count_per_sector = 30;
+        else
+            bs_indices = 1:numel(BS_list);
+            ue_count_per_sector = scenario.UE_per_sec;
+        end
 
-        for m = 1:numel(BS_list)
+        for m = bs_indices
             BS = BS_list(m);
             for s = 1 : BS.sector_num
                 sector = BS.sector(s);
-                for uk = 1:scenario.UE_per_sec
+                for uk = 1:ue_count_per_sector
                     Ue      = elements.Equipment(scenario,'UE');
                     id      = id + 1;
                     Ue.ID   = id;
                     if ismember(scenario.name,{'RMa','UMa','UMi'})
                         R = scenario.R;
                         Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
-                        if rand < 0.8  || indoor
+                        use_indoor_ue = strcmp(ue_environment, 'indoor') || ...
+                            (strcmp(ue_environment, 'mixed') && rand < 0.8);
+                        if ~is_uav_calibration && use_indoor_ue
                             % indoor
                             Ue.Indoor  = true;
                             Ue.d_2D_in = scenario.UE_max_d_2D_indoor*rand(1);
-                            Ue_pos      = network_layout.drop_in_hexagonUE(BS.Position(1:2), R, min_d+Ue.d_2D_in, sector.boresight,BS.sector_num);
+                            % d_2D_in is the indoor penetration depth used
+                            % by the O2I model.  It must not increase the
+                            % minimum 2D distance between the BS and UE.
+                            Ue_pos      = network_layout.drop_in_hexagonUE(BS.Position(1:2), R, min_d, sector.boresight,BS.sector_num);
                             N_fl        = randi([4, 8],1);
                             Ue.n_fl     = randi([1, N_fl],1);
                             Ue.O2IPL    = lowhigh{round(rand)+1};
@@ -173,13 +193,25 @@ else
         Ue      = elements.Equipment(scenario,'UE');
         id      = id + 1;
         Ue.ID   = id;
-        Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
-        if rand < 0.8
-            Ue.Indoor  = true;
-            Ue.d_2D_in = 25*rand(1);
+        if ismember(scenario.name, {'InH', 'InF'})
+            % These positions are already inside the indoor scenario.
+            % Indoor=false here means no outdoor-to-indoor penetration;
+            % it does not mean that the UE is physically outdoors.
+            Ue.fcin = fc;
+            Ue.Indoor = false;
+            Ue.d_2D_in = 0;
+            Ue.n_fl = 1;
         else
-            Ue.d_2D_in = zeros(1);
-            Ue.n_fl     = 1;
+            Ue.fcin = (BW/20)*(floor(20*rand)-(19/2)) + fc;
+            use_indoor_ue = strcmp(ue_environment, 'indoor') || ...
+                (strcmp(ue_environment, 'mixed') && rand < 0.8);
+            if use_indoor_ue
+                Ue.Indoor  = true;
+                Ue.d_2D_in = 25*rand(1);
+            else
+                Ue.d_2D_in = zeros(1);
+                Ue.n_fl     = 1;
+            end
         end
         Ue.Position = Ue_pos(uk,:);
         Ue.O2Isigma = randn;
@@ -208,9 +240,10 @@ end
 axis equal;view(0,90);
 end
 
-function [plot_controller, custom_ue_position] = localParseInputs(varargin)
+function [plot_controller, custom_ue_position, ue_environment] = localParseInputs(varargin)
 plot_controller = false;
 custom_ue_position = [];
+ue_environment = 'mixed';
 
 if nargin >= 1 && ~isempty(varargin{1})
     if islogical(varargin{1}) || (isnumeric(varargin{1}) && isscalar(varargin{1}))
@@ -222,6 +255,10 @@ end
 
 if nargin >= 2
     custom_ue_position = varargin{2};
+end
+
+if nargin >= 3 && ~isempty(varargin{3})
+    ue_environment = validatestring(varargin{3}, {'mixed', 'outdoor', 'indoor'});
 end
 end
 

@@ -10,6 +10,7 @@ classdef Sensing_type < handle
         sigle_STSP
         multi_STSP
         height = 1.5
+        dimensions                   % [length width height] in metres
 
         k1                          % parameter of multi_STSP RCS
         k2                          % parameter of multi_STSP RCS

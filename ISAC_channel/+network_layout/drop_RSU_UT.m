@@ -17,8 +17,11 @@ function RSU_pos = drop_RSU_UT(scenario)
     end
     C = C(:,1:2);   % only x,y
 
-    dx = scenario.ISD;           % short side
-    dy = scenario.ISD * 433/250; % long side (left-right sides are the long edges)
+    % TEMP UrbanGrid calibration: RSU grid width is independent from TRP ISD.
+    % Original state: dx = scenario.ISD;
+    dx = scenario.grid_dx;       % short side
+    % dy = scenario.ISD * 433/250; % long side (left-right sides are the long edges)
+    dy = scenario.grid_dy;
 
     hx = dx/2;
     hy = dy/2;

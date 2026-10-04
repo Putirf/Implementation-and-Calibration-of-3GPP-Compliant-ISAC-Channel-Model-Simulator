@@ -1,0 +1,6 @@
+function equipment_list = configureHumanCalibrationAntennas( ...
+        equipment_list, polarization_angles, equipment_label)
+%CONFIGUREHUMANCALIBRATIONANTENNAS Backward-compatible Human wrapper.
+equipment_list = tools.configureCalibrationAntennas( ...
+    equipment_list, polarization_angles, equipment_label);
+end

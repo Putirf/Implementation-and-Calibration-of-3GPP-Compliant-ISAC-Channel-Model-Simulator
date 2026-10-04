@@ -1,8 +1,10 @@
 function pos = drop_in_hexagonST(center,ue_pos_list, R, min_d,min_d_ue)
-    distance_to_center = 0;
-    distance_to_ue = zeros(size(ue_pos_list,1),1)-1;
+    distance_to_center = -inf;
+    distance_to_ue = -inf(size(ue_pos_list,1),1);
     center = center(1:2);
-    while distance_to_center <= min_d && any(distance_to_ue < min_d_ue) 
+    % A candidate is valid only when it passes both distance constraints.
+    % Continue drawing while either the BS-ST or any UE-ST constraint fails.
+    while distance_to_center < min_d || any(distance_to_ue < min_d_ue)
         hex_basis_a = R*exp(1j*pi/3)*rand;
         hex_basis_b = R*exp(-1j*pi/3)*rand;
         hex_sector_turn = randsrc(1,1,[0, 1, 2]);

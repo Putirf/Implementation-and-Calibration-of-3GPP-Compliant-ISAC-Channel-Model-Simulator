@@ -1,14 +1,19 @@
 function [veh_pos, side, lane_id] = drop_Vehicle_ST(scenario)
 
 center_xy = [0 0];
-lane_id = randi(1);
+% TEMP UrbanGrid calibration: target can be in either vehicle lane.
+% Original state: lane_id = randi(1);
+lane_id = randi(2);
 % lane_id = 1;
 % ---- geometry (centre-region size) ----
-ISD   = scenario.ISD;
+% TEMP UrbanGrid calibration: ST stays in center_xy=[0 0], but the road width is decoupled from TRP ISD.
+% Original state: ISD = scenario.ISD;
+ISD   = scenario.grid_dx;
 laneW = scenario.Lanewidth;
 swW   = scenario.Sidewalkwidth;
 
-dy = ISD * 433/250;
+% dy = ISD * 433/250;
+dy = scenario.grid_dy;
 
 roadTerm = 4*laneW + 2*swW;
 Lx = ISD - roadTerm;

@@ -88,7 +88,9 @@ classdef UMi < comm_scenario.Comm_Scenario
 
         function plot_BS_pos(obj,BS_pos_list)
             figure(1); hold off;
-            plot3(BS_pos_list(:,1),BS_pos_list(:,2),BS_pos_list(:,3),'ro','markersize',5,'linewidth',2, 'HandleVisibility','off');hold on;
+            % The calibration scene draws the BS as a black star.  Do not
+            % draw an additional red circle at the same coordinates.
+            hold on;
             around_umi = obj.R*[1,0;0.5,sqrt(3)/2;-0.5,sqrt(3)/2;-1,0;-0.5,-sqrt(3)/2;0.5,-sqrt(3)/2;1,0];   % umi sector
             % 3 sector
             around_3_sector = obj.R/sqrt(3)*[sqrt(3)/2,-0.5;0,0;0,1;sqrt(3)/2,1.5;sqrt(3),1;sqrt(3),0;sqrt(3)/2,-0.5;sqrt(3)/2,-1.5;0,-2;-sqrt(3)/2,-1.5;-sqrt(3)/2,-0.5;-sqrt(3),0;-sqrt(3),1;-sqrt(3)/2,1.5;0,1;0,0;-sqrt(3)/2,-0.5]; 

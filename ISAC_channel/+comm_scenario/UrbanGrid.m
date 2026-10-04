@@ -4,6 +4,11 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
         Lanewidth
         Sidewalkwidth
         vehicle_per_sec
+        user_case
+        BS_layer_num
+        grid_layer_num
+        grid_dx
+        grid_dy
     end
     properties(Dependent)
         BSposition
@@ -25,13 +30,28 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
             end
 
             obj.name       = 'UrbanGrid';
+            % Keep the TRP layout independent of the 250 m x 433 m road
+            % grid.  FR1 uses the TR 36.885/37.885 500 m macro layout;
+            % FR2 uses the 18-BS layout specified by TR 38.901.
+            obj.BS_layer_num = obj.layer_num;
+            obj.grid_layer_num = obj.layer_num;
+            obj.grid_dx = 250;
+            obj.grid_dy = 433;
             obj.BS_height  = 25;
-            obj.x_range    = [-obj.ISD*(2*obj.layer_num-1)/2,obj.ISD*(2*obj.layer_num-1)/2];
-            obj.y_range    = [-(obj.ISD*433/250)*(2*obj.layer_num-1)/2,(obj.ISD*433/250)*(2*obj.layer_num-1)/2];
+            % obj.x_range    = [-obj.ISD*(2*obj.layer_num-1)/2,obj.ISD*(2*obj.layer_num-1)/2];
+            % obj.y_range    = [-(obj.ISD*433/250)*(2*obj.layer_num-1)/2,(obj.ISD*433/250)*(2*obj.layer_num-1)/2];
+            obj.x_range    = [-obj.grid_dx*(2*obj.grid_layer_num-1)/2,obj.grid_dx*(2*obj.grid_layer_num-1)/2];
+            obj.y_range    = [-obj.grid_dy*(2*obj.grid_layer_num-1)/2,obj.grid_dy*(2*obj.grid_layer_num-1)/2];
             obj.Lanewidth = 3.5;
             obj.Sidewalkwidth = 3;
+            % Automotive Urban Grid does not use an additional fixed
+            % equipment-to-target rejection distance.  Separation follows
+            % the TR 37.885 road, lane, pedestrian and TRP geometry.
+            obj.BS_ST_min_d = 0;
+            obj.UE_ST_min_d = 0;
             obj.BS_Tx_power = 56;       % dB
             obj.vehicle_per_sec = 3;
+            obj.user_case = "Pedestrian";       % Pedestrian, RSU, Vehicle
 
             % RP
             obj.a_d = 10.3370;
@@ -58,11 +78,35 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
         end
 
         function BS_pos_list = get.BSposition(obj)
-            L = obj.layer_num;
+            if obj.ISD == 500
+                % TR 36.885 Figure A.1.3-1 / TR 37.885 baseline Urban
+                % macro layout: one centre site and its six first-tier
+                % neighbours.  Calibration does not model interference,
+                % so no geographical-distance wrap-around replicas are
+                % added here.
+                dy = sqrt(3) * obj.ISD / 2;
+                BS_pos_list = [ ...
+                     0,             0,  obj.BS_height; ...
+                    -obj.ISD,       0,  obj.BS_height; ...
+                     obj.ISD,       0,  obj.BS_height; ...
+                    -obj.ISD/2,    dy,  obj.BS_height; ...
+                     obj.ISD/2,    dy,  obj.BS_height; ...
+                    -obj.ISD/2,   -dy,  obj.BS_height; ...
+                     obj.ISD/2,   -dy,  obj.BS_height];
+                return;
+            end
+
+            % TR 38.901 Table 7.9.6.1-3 special Urban Grid layout for
+            % ISD=250 m: two BSs per road-grid anchor, 18 BSs in total.
+            L = obj.BS_layer_num;
             n = 2*L - 1;
 
             dx = obj.ISD;
-            dy = obj.ISD*433/250;
+            % dy = obj.ISD*433/250;
+            % TEMP UrbanGrid calibration: BS anchor row spacing follows ISD relative to road-grid width.
+            % Original temporary state: dy = 2 * obj.grid_dy;
+            % Original state before split: dy = obj.ISD*433/250;
+            dy = (obj.ISD / obj.grid_dx) * obj.grid_dy;
 
             x_list = ((-(n-1)/2):((n-1)/2)) * dx;
             y_list = ((-(n-1)/2):((n-1)/2)) * dy;
@@ -70,6 +114,8 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
             [X, Y] = meshgrid(x_list, y_list);   % X: dx grid, Y: dy grid
             BS_pos = [X(:), Y(:)];
 
+            % TRP locations follow the configured ISD. The centre road grid
+            % used for vehicle dropping remains 250 m by 433 m.
             offset1 = [10, dy/2 - 10];
             offset2 = [-dx/2+10, -10];
 
@@ -80,11 +126,15 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
         end
 
         function Center_pos = get.Centerposition(obj)
-            L = obj.layer_num;
+            % TEMP UrbanGrid calibration: road grid centers can expand independently from BS count.
+            % Original state: L = obj.layer_num;
+            L = obj.grid_layer_num;
             n = 2*L - 1;
 
-            dx = obj.ISD;
-            dy = obj.ISD*433/250;
+            % Original state: dx = obj.ISD;
+            dx = obj.grid_dx;
+            % dy = obj.ISD*433/250;
+            dy = obj.grid_dy;
 
             x_list = ((-(n-1)/2):((n-1)/2)) * dx;
             y_list = ((-(n-1)/2):((n-1)/2)) * dy;
@@ -111,11 +161,15 @@ classdef UrbanGrid < comm_scenario.Comm_Scenario
             parse(p,varargin{:});
             lanesPerDir = p.Results.lanesPerDir;
 
-            L  = obj.layer_num;
+            % TEMP UrbanGrid calibration: plot the road-grid layer, not the BS layer.
+            % Original state: L = obj.layer_num;
+            L  = obj.grid_layer_num;
             n  = 2*L - 1;
 
-            dx = obj.ISD;                 
-            dy = obj.ISD*433/250;         
+            % Original state: dx = obj.ISD;
+            dx = obj.grid_dx;
+            % dy = obj.ISD*433/250;
+            dy = obj.grid_dy;
 
             laneW = obj.Lanewidth;
             swW   = obj.Sidewalkwidth;

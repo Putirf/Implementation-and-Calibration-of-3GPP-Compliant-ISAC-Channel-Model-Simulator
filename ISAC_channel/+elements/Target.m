@@ -29,6 +29,14 @@ classdef Target < handle
 
         is_single_STSP              % boolen
         SP
+        SC_procA_comm_Xn
+        SC_procA_target_Xn
+        SC_procA_target_tx_Xn
+        SC_procA_target_rx_Xn
+        SC_procA_state
+        SC_procA_comm_state
+        SC_procA_target_state
+        SC_time_nodes
     end
     properties(Dependent)
         pos3D

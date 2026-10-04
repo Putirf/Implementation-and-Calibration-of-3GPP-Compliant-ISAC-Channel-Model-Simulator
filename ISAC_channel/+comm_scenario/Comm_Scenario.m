@@ -36,10 +36,12 @@ classdef Comm_Scenario < handle
         UE_sec_num
         UE_per_sec
         ST_per_cell        
+        simulation_times
 
         N0_dBm              % noise spectral density
 
         option              % ISAC channel step 9
+        target_path_drop_threshold_db = []  % Optional Step 10 override [dB]
 
         best_N              % pick up the best N-th STX-SRX pairs with the smallest power scaling factor of the target channel. 
 
@@ -52,6 +54,11 @@ classdef Comm_Scenario < handle
         b_h
         c_h
 
+        % Spatial consistency controls (TR 38.901 Clauses 7.6.3 and 7.9.5.1)
+        spatial_consistency_enable = false
+        spatial_consistency_procedure = 'B'   % 'A' or 'B'
+        spatial_consistency_num_sinusoids = 32
+
 
 
     end
@@ -63,8 +70,9 @@ classdef Comm_Scenario < handle
             obj.BS_sec_num = 1;
             obj.UE_sec_num = 1;
             obj.BS_noise_figure = 5;    % dB
-            obj.UE_per_sec = 10;
-            obj.ST_per_cell = 200;
+            obj.UE_per_sec = 1;
+            obj.simulation_times = 300;
+            obj.ST_per_cell = obj.simulation_times;
             obj.option = 2;             % 1:  Each NLOS ray in the STX-SPST link is coupled with each NLOS ray in the SPST-SRX link. 
                                         % 2: The NLOS rays in the STX-SPST link are 1-by-1 randomly coupled with the NLOS rays in the STSRX link.
             obj.best_N = 4;             % except for Highway
@@ -77,6 +85,9 @@ classdef Comm_Scenario < handle
             obj.frequency = 6e9;
 
             obj.RP_per_equipment = 3;
+
+            obj.spatial_consistency_enable = false;
+            obj.spatial_consistency_procedure = 'B';
            
         end
 
@@ -122,6 +133,18 @@ classdef Comm_Scenario < handle
                 end
                 if strcmp(obj.name, 'UrbanGrid')
                     config.ISD = 500;
+                    % TEMP UrbanGrid calibration: keep TR 37.885 urban road dimensions for FR1.
+                    % Original temporary state: config.Lanewidth = 7; config.Sidewalkwidth = 6;
+                    config.Lanewidth = 3.5;
+                    config.Sidewalkwidth = 3;
+                    % TR 37.885 Urban Grid FR1: a 500 m macro-site layout is
+                    % overlaid on the 250 m x 433 m road grid.  Three by
+                    % three road grids give the specified minimum
+                    % 750 m x 1299 m simulation region.
+                    config.BS_layer_num = 2;
+                    config.grid_layer_num = 2;
+                    config.grid_dx = 250;
+                    config.grid_dy = 433;
                 end
             elseif frequency == 30e9
                 config.BW = 4e8;
@@ -134,6 +157,12 @@ classdef Comm_Scenario < handle
                 end
                 if strcmp(obj.name, 'UrbanGrid')
                     config.ISD = 250;
+                    % TEMP UrbanGrid calibration: keep FR2 road-grid layout unchanged because it already matches ISD=250.
+                    % Original state: layer_num/ISD controlled both BS layout and road-grid layout.
+                    config.BS_layer_num = 2;
+                    config.grid_layer_num = 2;
+                    config.grid_dx = 250;
+                    config.grid_dy = 433;
                 end
             else
                 error('Unsupported ISAC preset frequency: %.0f Hz', frequency);
@@ -168,11 +197,17 @@ classdef Comm_Scenario < handle
                 obj.y_range = [-ceil(obj.ISD * (layer_count - 0.5)), ...
                     ceil(obj.ISD * (layer_count - 0.5))];
             elseif strcmp(obj.name, 'UrbanGrid')
-                layer_count = obj.('layer_num');
-                obj.x_range = [-obj.ISD * (2 * layer_count - 1) / 2, ...
-                    obj.ISD * (2 * layer_count - 1) / 2];
-                obj.y_range = [-(obj.ISD * 433 / 250) * (2 * layer_count - 1) / 2, ...
-                    (obj.ISD * 433 / 250) * (2 * layer_count - 1) / 2];
+                % TEMP UrbanGrid calibration: x/y range follows road-grid geometry, not BS ISD.
+                % Original state: layer_count = obj.('layer_num'); x_range used obj.ISD.
+                layer_count = obj.('grid_layer_num');
+                grid_dx = obj.('grid_dx');
+                grid_dy = obj.('grid_dy');
+                obj.x_range = [-grid_dx * (2 * layer_count - 1) / 2, ...
+                    grid_dx * (2 * layer_count - 1) / 2];
+                % obj.y_range = [-(obj.ISD * 433 / 250) * (2 * layer_count - 1) / 2, ...
+                %     (obj.ISD * 433 / 250) * (2 * layer_count - 1) / 2];
+                obj.y_range = [-grid_dy * (2 * layer_count - 1) / 2, ...
+                    grid_dy * (2 * layer_count - 1) / 2];
             end
         end
     end

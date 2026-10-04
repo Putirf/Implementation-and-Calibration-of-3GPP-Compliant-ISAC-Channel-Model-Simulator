@@ -25,6 +25,7 @@ classdef Equipment < handle
         fcin
         n_fl
         O2IPL
+        UEUE_O2IPL
 
         velocity
         theta_v
@@ -34,9 +35,27 @@ classdef Equipment < handle
         RP
 
         O2Isigma
+        UEUE_O2Isigma
         carPL
 
         PHI_n_m
+
+        % Spatial consistency raw LSP Gaussian variables, indexed by peer ID.
+        LSP_raw_LOS
+        LSP_raw_NLOS
+        LSP_raw_O2I
+        SC_procB_raw
+        SC_procA_comm_Xn
+        SC_procA_comm_raw_LOS
+        SC_procA_comm_raw_NLOS
+        SC_procA_comm_raw_O2I
+        SC_procA_target_Xn
+        SC_procA_target_tx_Xn
+        SC_procA_target_rx_Xn
+        SC_procA_state
+        SC_procA_comm_state
+        SC_procA_target_state
+        SC_time_nodes
 
 
     end
@@ -84,8 +103,15 @@ classdef Equipment < handle
                 obj.antenna_params.panel.Kh           = 1;
                 obj.antenna_params.panel.d_H          = 0.5;
                 obj.antenna_params.panel.d_V          = 0.5;
-                obj.antenna_params.panel.P            = 2;
-                obj.antenna_params.panel.X_pol        = [45, -45];
+                if strcmp(scenario.name, 'InF')
+                    % TR 38.901 Table 7.8-7: one vertically polarized
+                    % isotropic antenna element for the InF scenario.
+                    obj.antenna_params.panel.P        = 1;
+                    obj.antenna_params.panel.X_pol    = 0;
+                else
+                    obj.antenna_params.panel.P        = 2;
+                    obj.antenna_params.panel.X_pol    = [45, -45];
+                end
                 obj.antenna_params.panel.ele_downtilt = 90;
                 obj.antenna_params.panel.ele_panning  = 0;
                 obj.antenna_params.pol_model = 'model-2';
@@ -114,8 +140,13 @@ classdef Equipment < handle
                 obj.antenna_params.panel.Kh           = 1;
                 obj.antenna_params.panel.d_H          = 0.5;
                 obj.antenna_params.panel.d_V          = 0.5;
-                obj.antenna_params.panel.P            = 2;
-                obj.antenna_params.panel.X_pol        = [90, 0];
+                if strcmp(scenario.name, 'InF')
+                    obj.antenna_params.panel.P        = 1;
+                    obj.antenna_params.panel.X_pol    = 0;
+                else
+                    obj.antenna_params.panel.P        = 2;
+                    obj.antenna_params.panel.X_pol    = [90, 0];
+                end
                 obj.antenna_params.panel.ele_downtilt = 90;
                 obj.antenna_params.panel.ele_panning  = 0;
                 obj.antenna_params.beta               = 90;

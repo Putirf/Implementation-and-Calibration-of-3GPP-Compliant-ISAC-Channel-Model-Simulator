@@ -1,7 +1,5 @@
 function pos = drop_in_Indoor_uniform(trp_pos_list, ue_pos_list, xy_range, min_d_trp, min_d_ue)
-% drop_in_Indoor_rectReject
-% Uniformly drop 1 target in a rectangular area (xy_range),
-% then reject and redraw if outside the convex hull of TRP deployment.
+%DROP_IN_INDOOR_UNIFORM Uniformly drop one target in a rectangular area.
 %
 % INPUTS:
 %   trp_pos_list : [Ntrp x 2] TRP (x,y)
@@ -17,10 +15,6 @@ function pos = drop_in_Indoor_uniform(trp_pos_list, ue_pos_list, xy_range, min_d
     if nargin < 5 || isempty(min_d_ue),  min_d_ue  = 0; end
     if isempty(ue_pos_list), ue_pos_list = zeros(0,2); end
 
-    x = trp_pos_list(:,1); y = trp_pos_list(:,2);
-    k = convhull(x, y);
-    hx = x(k); hy = y(k);
-
     xmin = xy_range(1,1); xmax = xy_range(1,2);
     ymin = xy_range(2,1); ymax = xy_range(2,2);
 
@@ -32,10 +26,6 @@ function pos = drop_in_Indoor_uniform(trp_pos_list, ue_pos_list, xy_range, min_d
         Px = xmin + (xmax - xmin) * rand;
         Py = ymin + (ymax - ymin) * rand;
         P  = [Px, Py];
-
-        if ~inpolygon(Px, Py, hx, hy)
-            continue;
-        end
 
         if min_d_trp > 0
             d_trp = sqrt(sum((trp_pos_list(:,1:2) - P).^2, 2));
