@@ -1,6 +1,6 @@
 # Implementation and Calibration of a 3GPP-Compliant ISAC Channel Model Simulator
 
-This repository presents an implementation of the Integrated Sensing and Communication (ISAC) channel model based on 3GPP TR 38.901 (v19).
+This repository presents an implementation of the Integrated Sensing and Communication (ISAC) channel model based on 3GPP TR 38.901 (v19.4.0).
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/ab331751-f0b5-403d-abff-9277f0e265f4" width="800">
