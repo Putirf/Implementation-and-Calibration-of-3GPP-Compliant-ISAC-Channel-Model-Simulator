@@ -551,7 +551,7 @@ classdef Comm_channel < handle
                 elseif strcmp(obj.scenario.name,'InF')
                     penetration_level = 'high';
                 end
-                material_loss_dB = [2+0.2*fc;25.4+0.11*fc;5+4*fc;4.85+0.12*fc];
+                material_loss_dB = [2+0.2*fc;23+0.3*fc;5+4*fc;4.85+0.12*fc];
                 if strcmp(penetration_level,'low')
                     penetration_loss_dB = 5-10*log10(0.3*10.^(-material_loss_dB(1,:)/10) + 0.7*10.^(-material_loss_dB(3,:)/10));
                     penetration_sigma_dB = 4.4;
