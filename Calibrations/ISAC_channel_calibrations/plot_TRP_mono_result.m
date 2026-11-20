@@ -192,8 +192,8 @@ switch caseInfo.caseCombination
         xlsxLS = fullfile(folder, 'Human_LargeScaleCalibration_InF-SH_TerrestrialUT_v009_CATT_ITRI.XLSX');
         xlsxFull = fullfile(folder, 'FullCalibration_InF-SH_ConcatenationOption2_TerrestrialUT_v005_CATT_mod.xlsx');
     case 6
-        xlsxLS = fullfile(folder, 'AGVLargeScaleCalibration_InF-SH_TerrestrialUT_OneScatteringPoint_v006_BUPT_IDCC.xlsx');
-        xlsxFull = fullfile(folder, 'AGVFullCalibration_InF-SH_ConcatenationOption2_TerrestrialUT_OneScatteringPoint_v006_IDCC_mod.xlsx');
+        xlsxLS = fullfile(folder, 'AGVLargeScale_InF-SH_TerrestrialUT_OneScatteringPoint_v006_BUPT_IDCC.xlsx');
+        xlsxFull = fullfile(folder, 'AGVFull_InF-SH_ConcatenationOption2_TerrestrialUT_OneScatteringPoint_v006_IDCC_mod.xlsx');
     case 7
         switch caseInfo.urbanUtType
             case 'RSU'

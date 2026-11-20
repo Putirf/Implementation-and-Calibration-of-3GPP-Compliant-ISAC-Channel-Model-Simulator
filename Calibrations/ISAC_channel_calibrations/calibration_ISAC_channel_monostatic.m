@@ -47,7 +47,11 @@ else
 end
 
 if run_all_calibration_cases
-    for case_idx = 1:numel(calibration_cases) %#ok<UNRCH>
+    case_id_list = 1:numel(calibration_cases);
+    if strcmp(sensing_mode, 'UE_mono')
+        case_id_list = 2:numel(calibration_cases);
+    end
+    for case_idx = case_id_list
         target_results = cell(1, numel(frequency_preset_list));
         rp_results = cell(1, numel(frequency_preset_list));
         for preset_idx = 1:numel(frequency_preset_list)
@@ -654,14 +658,6 @@ if full_cali
     target_result.Full.CouplingLoss = sort(selected_full_loss);
     target_result.Full.DS = selected_delay_spread * 1e9;
     target_result.Full.SA = selected_angular_spread;
-    if strcmp(sim_data.sensing_mode, 'UE_mono') ...
-            && strcmp(scenario.name, 'UrbanGrid') ...
-            && strcmp(sensing_type.sensing_type, 'Vehicle')
-        target_result.Full.PowerDiagnostics = write_urban_ue_full_power_diagnostics( ...
-            sim_data, target_result, selected_full_link_id, sa_aod, sa_aoa);
-        target_result.Full.Step10Diagnostics = write_urban_ue_step10_diagnostics( ...
-            sim_data, target_result);
-    end
 end
 end
 

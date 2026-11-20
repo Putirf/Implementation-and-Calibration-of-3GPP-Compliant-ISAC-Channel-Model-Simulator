@@ -75,23 +75,23 @@ classdef Equipment < handle
                 if ismember(scenario.name,{'RMa','UMa','UMi'})
                     if scenario.layer_num == 1
                         obj.cluster_wrapped = [0, 0];
-                        return;
+                    else
+                        L = scenario.layer_num;
+                        i = L;
+                        j = L - 1;
+
+                        e1 = [3/2, sqrt(3)/2];
+                        e2 = [0,   sqrt(3)];
+
+                        v1 = i*e1 + j*e2;
+                        v2 = (i+j)*e1 - i*e2;
+                        v3 = j*e1 - (i+j)*e2;
+
+                        obj.cluster_wrapped = [
+                            0,   0;
+                            v1;     v2;     v3;
+                            -v1;    -v2;    -v3] * scenario.R;
                     end
-                    L = scenario.layer_num;
-                    i = L;
-                    j = L - 1;
-
-                    e1 = [3/2, sqrt(3)/2];
-                    e2 = [0,   sqrt(3)];
-
-                    v1 = i*e1 + j*e2;
-                    v2 = (i+j)*e1 - i*e2;
-                    v3 = j*e1 - (i+j)*e2;
-
-                    obj.cluster_wrapped = [
-                        0,   0;
-                        v1;     v2;     v3;
-                        -v1;    -v2;    -v3] * scenario.R;
                 end
                 obj.antenna_params.array.Mg           = 1;                 %  the number of antenna panels with the same polarization in each column.
                 obj.antenna_params.array.Ng           = 1;

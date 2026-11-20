@@ -71,7 +71,7 @@ classdef Comm_Scenario < handle
             obj.UE_sec_num = 1;
             obj.BS_noise_figure = 5;    % dB
             obj.UE_per_sec = 1;
-            obj.simulation_times = 300;
+            obj.simulation_times = 150;
             obj.ST_per_cell = obj.simulation_times;
             obj.option = 2;             % 1:  Each NLOS ray in the STX-SPST link is coupled with each NLOS ray in the SPST-SRX link. 
                                         % 2: The NLOS rays in the STX-SPST link are 1-by-1 randomly coupled with the NLOS rays in the STSRX link.

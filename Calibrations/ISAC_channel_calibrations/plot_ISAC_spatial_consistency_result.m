@@ -80,10 +80,10 @@ function xlsx_file = localBenchmarkFile(result)
 case_name = lower(string(result.case_name));
 paths = get_ISAC_calibration_paths();
 benchmark_folder = fullfile(paths.referenceRoot, ...
-    'Spatial consistency-UrbanGridandInO');
+    'Spatial consistency');
 if contains(case_name, 'urbangrid') || contains(lower(string(result.scenario)), 'urbangrid')
     xlsx_file = fullfile(benchmark_folder, ...
-        'SpatialConsistencyCalibration_Urban_grid_PedestrianUT_OneScatteringPoint_v004_CATT_CICTCI_xiaomi.xlsx');
+        'SpatialConsistencyCalibration_Urban_grid_PedestrianUT_OneScatteringPoint_v004.xlsx');
 elseif contains(case_name, 'inh') || contains(lower(string(result.scenario)), 'inh')
     xlsx_file = fullfile(benchmark_folder, ...
         'SpatialConsistencyCalibration_InH_TerrestrialUT_v002_xiaomi_IDCC.xlsx');

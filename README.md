@@ -16,7 +16,7 @@ The ISAC calibration workflows cover TRP-monostatic (`TRP_mono`), UE-monostatic 
 
 Snapshot calibration includes large-scale coupling loss and, with full-channel generation enabled, full coupling loss, delay spread (DS), and angular spreads (ASD, ZSD, ASA, and ZSA). The ISAC frequency presets are `ISAC_FR1` (6 GHz, 100 MHz bandwidth) and `ISAC_FR2` (30 GHz, 400 MHz bandwidth).
 
-Calibration figures are saved under `Results`. Diagnostic outputs are stored separately under `Calibrations/ISAC_channel_calibrations/diagnostics/results`. Small-sample workflow checks do not establish agreement of every full Monte Carlo CDF with the company reference curves.
+Calibration figures are saved under `Results`. Small-sample workflow checks do not establish agreement of every full Monte Carlo CDF with the company reference curves.
 
 ## Data Structure
 
@@ -32,9 +32,9 @@ ISAC_channel/                         Channel models, scenarios, sensing types,
                                      network layouts, antennas, and example driver
 Calibrations/
   ISAC_channel_calibrations/          ISAC calibration drivers and plotting
-    ISAC_benchmark/                  Company reference curves
-    diagnostics/                     Diagnostic scripts, notes, and results
+  ISAC_benchmark/                     ISAC company reference curves
   Comm_channel_calibrations/          Communication LS/Full/spatial calibration
+  Comm_benchmark/                     Communication company reference curves
 Results/                             Calibration figures and existing result sets
 3GPP規格書/                          Local specification documents
 ```
@@ -42,6 +42,10 @@ Results/                             Calibration figures and existing result set
 ## Usage
 
 ### Calibration
+
+The calibration workflows use MATLAB, Signal Processing Toolbox, Statistics and Machine Learning Toolbox, and Communications Toolbox. The workflows were checked with MATLAB R2025b.
+
+The external `multiprod.m` function is required.
 
 To reproduce the calibration plots, open the appropriate driver under `Calibrations/ISAC_channel_calibrations/`, edit its controls, and run it in MATLAB:
 
@@ -63,7 +67,7 @@ The snapshot drivers share the following case IDs:
 | 6 | AGV / InF-SH |
 | 7 | Vehicle / Urban Grid |
 
-`UE_mono` supports Human, InF AGV, and Urban Grid Vehicle; UAV case 1 is available in `TRP_mono` and the three bistatic modes. Shared paths are resolved relative to the driver by `get_ISAC_calibration_paths.m`; no machine-specific path edit is required for the ISAC drivers.
+`UE_mono` supports Human, InF AGV, and Urban Grid Vehicle; its all-case run skips UAV case 1, which is available in `TRP_mono` and the three bistatic modes. Shared paths are resolved relative to the driver by `get_ISAC_calibration_paths.m`; no machine-specific path edit is required for the ISAC drivers.
 
 Set `full_cali = false` for large-scale-only calibration or `true` to include full-channel metrics. `do_background` controls additional background-channel evaluation. `use_traditional_rms` selects the angular-spread calculation. Both snapshot drivers select links using large-scale target-channel power and retain that selection for Full, DS, and angular-spread statistics.
 
@@ -85,7 +89,7 @@ Current outdoor Human calibration trials use 100% outdoor UTs in `UE_mono` and `
 
 Spatial consistency is evaluated separately from snapshot LS/Full calibration, which disables spatial consistency. In `calibration_ISAC_spatial_consistency.m`, set `selected_case_ids` to `1` for Urban Grid Vehicle, `2` for InH Human, or `[]` for both. Configure `frequency_presets`, `num_ue_per_drop`, `num_drops`, and `full_channel` there. Communication-channel calibration drivers remain under `Calibrations/Comm_channel_calibrations/`.
 
-The shared snapshot plotter reads the company benchmark workbooks and exports PNG/MATLAB FIG files to `Results`. Snapshot drivers pass results directly to plotting rather than automatically saving every result structure as a MAT file. Diagnostic tools and saved audit data are described in the [diagnostics README](Calibrations/ISAC_channel_calibrations/diagnostics/README.md).
+The shared snapshot plotter reads the company benchmark workbooks and exports PNG/MATLAB FIG files to `Results`. Snapshot drivers pass results directly to plotting rather than automatically saving every result structure as a MAT file.
 
 ### ISAC Channel
 

@@ -5,7 +5,7 @@ paths.calibrationDir = fileparts(mfilename('fullpath'));
 paths.implementationRoot = fileparts(fileparts(paths.calibrationDir));
 paths.isacRoot = fullfile(paths.implementationRoot, 'ISAC_channel');
 paths.referenceRoot = fullfile( ...
-    paths.calibrationDir, 'ISAC_benchmark');
+    fileparts(paths.calibrationDir), 'ISAC_benchmark');
 paths.resultsRoot = fullfile(paths.implementationRoot, 'Results');
 
 if ~isfolder(paths.isacRoot)

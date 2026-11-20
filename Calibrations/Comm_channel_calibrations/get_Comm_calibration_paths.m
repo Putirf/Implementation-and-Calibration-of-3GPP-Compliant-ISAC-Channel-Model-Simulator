@@ -5,7 +5,7 @@ paths.calibrationRoot = fileparts(mfilename('fullpath'));
 paths.implementationRoot = fileparts(fileparts(paths.calibrationRoot));
 paths.isacRoot = fullfile(paths.implementationRoot, 'ISAC_channel');
 paths.referenceRoot = fullfile( ...
-    paths.calibrationRoot, 'Comm_benchmark');
+    fileparts(paths.calibrationRoot), 'Comm_benchmark');
 paths.resultsRoot = fullfile(paths.implementationRoot, 'Results');
 paths.spatialConsistencyRoot = fullfile( ...
     paths.calibrationRoot, 'Calibration__comm_spatial_consistency');
