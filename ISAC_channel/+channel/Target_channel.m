@@ -11,6 +11,8 @@ classdef Target_channel < handle
         O2I = false
         O2IPL
         O2Isigma = 0
+        leg_O2I = [] % Per-leg O2I for outdoor Human TRP-UE target channels.
+        leg_reference_scenario = {}
         scenario
         fc
         d_2D
@@ -20,6 +22,7 @@ classdef Target_channel < handle
         bistatic_angle
         option
         sensing_mode
+        is_leg_reference = false
 
         phi_LOS_AOD
         theta_LOS_ZOD
@@ -85,6 +88,7 @@ classdef Target_channel < handle
         coupling_txrx_path_table_keep
         path_num_keep
         RCS_sigma_S_n_m
+        Step10Diagnostics = [] % Read-only snapshot for Urban Grid UE_mono diagnostics.
 
         mu_lg_delta_tau
         sigma_lg_delta_tau
@@ -140,6 +144,8 @@ classdef Target_channel < handle
             % Steps 2-4 and one directed-leg cache for Steps 5-13.
             step24_cache = [];
             leg_small_scale_cache = [];
+            is_leg_reference = numel(varargin) >= 3 && isequal(varargin{3}, true);
+            obj.is_leg_reference = is_leg_reference;
             if ~isempty(varargin)
                 step24_cache = varargin{1};
             end
@@ -168,7 +174,8 @@ classdef Target_channel < handle
             target_type = char(obj.ST.type.sensing_type);
             supported_ue_mono = strcmp(target_type, 'Human') ...
                 || (strcmp(target_type, 'AGV') && strcmp(scenario.name, 'InF')) ...
-                || (strcmp(target_type, 'Vehicle') && strcmp(scenario.name, 'UrbanGrid'));
+                || (strcmp(target_type, 'Vehicle') && strcmp(scenario.name, 'UrbanGrid')) ...
+                || (is_leg_reference && strcmp(target_type, 'UAV'));
             if obj.isUeMonostatic() && ~supported_ue_mono
                 error('TargetChannel:UnsupportedUeMonostaticTarget', ...
                     ['Unsupported UE_mono target/scenario combination: ' ...
@@ -233,6 +240,11 @@ classdef Target_channel < handle
             [obj.phi_LOS_AOA(2), obj.theta_LOS_ZOA(2)] = cart2sph_(x(2), y(2), z(2));
             [obj.phi_LOS_AOA(1), obj.theta_LOS_ZOA(1)] = cart2sph_(-x(1), -y(1), -z(1));
             [obj.phi_LOS_AOD(2), obj.theta_LOS_ZOD(2)] = cart2sph_(-x(2), -y(2), -z(2));
+
+            if obj.isOutdoorHumanTrpUe() || obj.isUavTrpUe() || obj.isUeUe()
+                obj.generateReferencedTrpUe(step24_cache, leg_small_scale_cache);
+                return;
+            end
 
             %% Steps 2-4: physical ST-TRP leg state
             % The key is independent of the TX/RX role, so the same physical
@@ -351,7 +363,17 @@ classdef Target_channel < handle
                         Pr_LOS = (18./d2D + exp(-d2D/63).*(1-18./d2D)) .* (1+C_tmp*(5/4)*((d2D/100).^3).*exp(-d2D/150));
                     end
             case 'UMi'
-                Pr_LOS = min(18./d2D,1).*(1-exp(-d2D./36))+exp(-d2D./36);
+                if strcmp(obj.scenario.subname, 'AV') && height > 22.5
+                    d1 = max(294.05*log10(height)-432.94, 18);
+                    p1 = 233.98*log10(height)-0.95;
+                    if d2D <= d1
+                        Pr_LOS = 1;
+                    else
+                        Pr_LOS = d1/d2D + exp(-d2D/p1)*(1-d1/d2D);
+                    end
+                else
+                    Pr_LOS = min(18./d2D,1).*(1-exp(-d2D./36))+exp(-d2D./36);
+                end
             case'RMa'
                 Pr_LOS = min(exp(-(d2D-10)./1000),1);
                 case'InH'
@@ -366,7 +388,7 @@ classdef Target_channel < handle
                             error(['Case "' obj.scenario.subname '" for 3D-InH is not valid!']);
                     end
                 case'InF'
-                    switch obj.targetReferenceInFSubscenario()
+                    switch obj.targetReferenceInFSubscenario(txrx)
                         case {'SL','DL'}
                             k_subsce = -obj.scenario.d_cluster/log(1-obj.scenario.r);
                         case {'SH','DH'}
@@ -382,10 +404,10 @@ classdef Target_channel < handle
                         Pr_LOS = obj.scenario.p_subsce*exp(-d_2Din/k_subsce);
                     end
                 case 'UrbanGrid'
-                    if obj.isUrbanGridVehicleV2PTarget()
+                    if obj.isUrbanGridVehicleV2PTarget(txrx)
                         [obj.v2x_condition(txrx), Pr_LOS] = ...
                             obj.urbanGridVehicleV2pCondition(txrx, d2D);
-                    elseif obj.isUrbanGridVehicleV2BTarget()
+                    elseif obj.isUrbanGridVehicleV2BTarget(txrx)
                         % TR 38.901 Table 7.9.3-2 maps a TRP-Vehicle target
                         % leg to TR 37.885 Urban V2B, including its urban
                         % propagation-condition probability.
@@ -394,8 +416,14 @@ classdef Target_channel < handle
                         Pr_LOS = obj.legacyUrbanGridLosProbability(d2D);
                     end
             end
+            if strcmp(obj.scenario.name, 'InF') ...
+                    && strcmp(obj.ST.type.sensing_type, 'AGV') ...
+                    && ((obj.isUeMonostatic() && ~obj.is_leg_reference) || ...
+                    (strcmp(obj.sensing_mode, 'BS_UE_bistatic') && strcmp(obj.sector(txrx).type, 'UE')))
+                Pr_LOS = 1;
+            end
             randlos = obj.targetStep24LosUniform(txrx);
-            if obj.isUrbanGridVehicleV2PTarget()
+            if obj.isUrbanGridVehicleV2PTarget(txrx)
                 if obj.v2x_condition(txrx) == 1
                     obj.bLOS(txrx) = (randlos < Pr_LOS);
                     if ~obj.bLOS(txrx)
@@ -507,9 +535,22 @@ classdef Target_channel < handle
             case 'UMi'
                 effective_tx_height = tx_height-1;
                 effective_rx_height = rx_height-1;
+                if obj.isUeMonostatic() && ...
+                        strcmp(obj.scenario.name, 'UMi') ...
+                        && strcmp(obj.ST.type.sensing_type, 'Human')
+                    effective_tx_height = 0.8;
+                end
                 breakpoint_distance = 4*effective_tx_height*effective_rx_height*obj.fc/3e8;
                 for txrx = 1:2
-                    if (obj.d_2D(txrx) <= breakpoint_distance)% && (obj.d_2D >= 10)
+                    is_aerial = strcmp(obj.scenario.subname, 'AV') && rx_height > 22.5;
+                    if is_aerial
+                        if rx_height > 300 || obj.d_2D(txrx) > 4000
+                            error('TargetChannel:UmiAvRange', 'UMi-AV requires target height <=300 m and 2D distance <=4 km.');
+                        end
+                        fspl = 20*log10(4*pi*obj.d_3D(txrx)*obj.fc/3e8);
+                        los_pathloss_dB = max(fspl, 30.9 + ...
+                            (22.25-0.5*log10(rx_height))*log10(obj.d_3D(txrx)) + 20*log10(fc_GHz));
+                    elseif (obj.d_2D(txrx) <= breakpoint_distance)% && (obj.d_2D >= 10)
                         los_pathloss_dB = 32.4 + 21*log10(obj.d_3D(txrx)) + 20*log10(fc_GHz); % TR38.901
                     elseif  (obj.d_2D(txrx) > breakpoint_distance) && (obj.d_2D(txrx) < 5000)
                         % los_pathloss_dB = 40*log10(obj.d_3D)+28+20*log10(fc_GHz)-9*log10(breakpoint_distance.^2+(tx_height-rx_height).^2); TR36.873
@@ -518,10 +559,18 @@ classdef Target_channel < handle
                     if obj.bLOS(txrx)
                         pathloss_dB(txrx) = los_pathloss_dB;
                         shadow_sigma_dB(txrx) = 4; % TR38.901
+                        if is_aerial
+                            shadow_sigma_dB(txrx) = max(5*exp(-0.01*rx_height), 2);
+                        end
                     else
                         nlos_pathloss_dB = 35.3*log10(obj.d_3D(txrx))+22.4+21.3*log10(fc_GHz)-0.3*(rx_height-1.5); % TR38.901
+                        if is_aerial
+                            nlos_pathloss_dB = 32.4 + ...
+                                (43.2-7.6*log10(rx_height))*log10(obj.d_3D(txrx)) + 20*log10(fc_GHz);
+                        end
                         pathloss_dB(txrx) = max(los_pathloss_dB, nlos_pathloss_dB);
-                        shadow_sigma_dB(txrx) = 7.82; % TR38.901
+                         shadow_sigma_dB(txrx) = 7.82; % TR38.901
+                        if is_aerial, shadow_sigma_dB(txrx) = 8; end
                         % optional
                         % nlos_pathloss_dB = 32.4+20*log10(fc_GHz)+31.9*log10(obj.d_3D);
                         % shadow_sigma_dB = 8.2;
@@ -569,12 +618,14 @@ classdef Target_channel < handle
                    pathloss_dB(txrx) = 32.4 + 17.3*log10(obj.d_3D(txrx)) + 20*log10(fc_GHz);
                    shadow_sigma_dB(txrx) = 3;
                    if ~obj.bLOS(txrx)
-                       nlos_pathloss_dB = 17.3 + 38.3*log10(obj.d_3D(txrx)) + 24.9*log10(fc_GHz);
-                       pathloss_dB(txrx) = max(pathloss_dB(txrx),nlos_pathloss_dB);
+                       nlos_pathloss_dB = 17.3 + 38.3*log10(obj.d_3D(txrx)) ...
+                           + 24.9*log10(fc_GHz);
+                       pathloss_dB(txrx) = max(pathloss_dB(txrx), nlos_pathloss_dB);
                        shadow_sigma_dB(txrx) = 8.03;
-                       % optional
-                       % nlos_pathloss_dB = 32.4+20*log10(fc_GHz)+31.9*log10(obj.d_3D);
-                       % shadow_sigma_dB = 8.29;
+                       % Optional alternative:
+                       % nlos_pathloss_dB = 32.4 + 20*log10(fc_GHz) ...
+                       %     + 31.9*log10(obj.d_3D(txrx));
+                       % shadow_sigma_dB(txrx) = 8.29;
                    end
                end
             case 'InF'
@@ -583,11 +634,9 @@ classdef Target_channel < handle
                     %                 shadow_sigma_dB = 4;
                     shadow_sigma_dB(txrx) = 4.3;
                     if ~obj.bLOS(txrx)
-                        pathloss_subname = obj.targetReferenceInFSubscenario();
-                        if obj.isUeMonostatic() && strcmp(obj.scenario.subname, 'SH')
-                            % Human UE-mono calibration specifies InF-SH.
-                            % Keep its NLOS pathloss and SF statistics while
-                            % handling low-height LOS probability separately.
+                        pathloss_subname = obj.targetReferenceInFSubscenario(txrx);
+                        if strcmp(obj.scenario.subname, 'SH') ...
+                                && obj.isUeMonostatic() && ~obj.is_leg_reference
                             pathloss_subname = 'SH';
                         end
                         switch pathloss_subname
@@ -629,10 +678,10 @@ classdef Target_channel < handle
                 end
             case 'UrbanGrid'
                 for txrx=1:2
-                    if obj.isUrbanGridVehicleV2PTarget()
+                    if obj.isUrbanGridVehicleV2PTarget(txrx)
                         [pathloss_dB(txrx), shadow_sigma_dB(txrx)] = ...
                             obj.urbanGridVehicleV2pPathloss(txrx, fc_GHz);
-                    elseif obj.isUrbanGridVehicleV2BTarget()
+                    elseif obj.isUrbanGridVehicleV2BTarget(txrx)
                         [pathloss_dB(txrx), shadow_sigma_dB(txrx)] = ...
                             obj.urbanGridVehicleV2BPathloss(txrx, tx_height, rx_height, fc_GHz);
                     else
@@ -652,34 +701,59 @@ classdef Target_channel < handle
             obj.sigma_SF = shadow_sigma_dB;
         end
 
-        function tf = isUrbanGridVehicleV2BTarget(obj)
+        function tf = isUrbanGridVehicleV2BTarget(obj, txrx)
+            if nargin < 2
+                endpoint_is_bs = all(strcmp({obj.sector.type}, 'BS'));
+            else
+                endpoint_is_bs = strcmp(obj.sector(txrx).type, 'BS');
+            end
             tf = strcmp(obj.scenario.name, 'UrbanGrid') ...
-                && all(strcmp({obj.sector.type}, 'BS')) ...
-                && isa(obj.ST, 'elements.Target') ...
-                && ~isempty(obj.ST.type) ...
-                && isprop(obj.ST.type, 'sensing_type') ...
+                && endpoint_is_bs && isa(obj.ST, 'elements.Target') ...
                 && strcmpi(char(obj.ST.type.sensing_type), 'Vehicle');
         end
 
-        function tf = isUrbanGridVehicleV2PTarget(obj)
+        function tf = isUrbanGridVehicleV2PTarget(obj, txrx)
             tf = false;
-            if ~obj.isUeMonostatic() ...
-                    || ~strcmp(obj.scenario.name, 'UrbanGrid') ...
+            if ~strcmp(obj.scenario.name, 'UrbanGrid') ...
                     || ~strcmpi(char(obj.ST.type.sensing_type), 'Vehicle')
                 return;
             end
-            attached_types = string(arrayfun( ...
-                @(equipment) equipment.sector.antenna.attachedType, obj.sector, ...
-                'UniformOutput', false));
-            tf = all(attached_types == "UE-Pedestrian");
+            if nargin < 2
+                % Preserve the existing UE-monostatic polarization convention.
+                if ~obj.isUeMonostatic(), return; end
+                endpoints = 1:numel(obj.sector);
+            else
+                endpoints = txrx;
+            end
+            allowed_types = ["UE", "UE-Pedestrian"];
+            if obj.isUeMonostatic()
+                allowed_types = [allowed_types, "UE-RSU", "UE-Vehicle"];
+            end
+            tf = all(arrayfun(@(k) strcmp(obj.sector(k).type, 'UE') ...
+                && ismember(string(obj.sector(k).sector.antenna.attachedType), ...
+                    allowed_types), endpoints));
         end
 
         function [condition, pr_los] = urbanGridVehicleV2pCondition(obj, txrx, d2D)
-            % TR 37.885 Clause 6.2: different streets are NLOS; links on
-            % the same street are LOS/NLOSv with the Urban probability.
-            ue_side = obj.urbanGridEndpointSide(obj.sector(txrx).Position(1:2));
             target_side = mod(round(obj.ST.phi_v / 90), 4) + 1;
-            if ue_side ~= target_side
+            endpoint = obj.sector(txrx);
+            ut_type = string(endpoint.sector.antenna.attachedType);
+            if obj.isUeMonostatic() && ismember(ut_type, ["UE-RSU", "UE-Vehicle"])
+                % An intersection RSU belongs to both crossing streets.
+                road_centers = [obj.scenario.grid_dy/2, obj.scenario.grid_dx/2, ...
+                    -obj.scenario.grid_dy/2, -obj.scenario.grid_dx/2];
+                perpendicular_axis = 2 - mod(target_side+1, 2);
+                same_street = abs(endpoint.Position(perpendicular_axis) ...
+                    - road_centers(target_side)) <= 2*obj.scenario.Lanewidth + 1e-8;
+                if ut_type == "UE-Vehicle"
+                    horizontal = mod(round(endpoint.phi_v/90), 2) == 0;
+                    same_street = same_street && (horizontal == (mod(target_side, 2) == 1));
+                end
+            else
+                ue_side = obj.urbanGridEndpointSide(endpoint.Position(1:2));
+                same_street = ue_side == target_side;
+            end
+            if ~same_street
                 condition = 3;
                 pr_los = 0;
             else
@@ -712,28 +786,24 @@ classdef Target_channel < handle
                     + 18.2*log10(fc_GHz);
                 shadow_sigma_dB = 3;
                 if obj.v2x_condition(txrx) == 2
-                    % TR 37.885 type-2 vehicle antenna/blocker heights.
-                    % Use antenna height for blockage, not SPST height H/2.
-                    ue_antenna_height = obj.sector.height;
-                    ue_antenna_height = ue_antenna_height( ...
-                        min(txrx, numel(ue_antenna_height)));
-                    vehicle_antenna_height = 1.6;
-                    blocker_height = 1.6; % Current Option A: all type 2.
+                    ue_antenna_height = obj.sector(txrx).height;
+                    vehicle_antenna_height = obj.ST.type.height; % Vehicle type 2.
+                    blocker_height = 1.6; % Option A: 100% vehicle type 2.
                     endpoint_heights = [ue_antenna_height, vehicle_antenna_height];
                     if min(endpoint_heights) > blocker_height
                         blockage_mean = 0;
-                        blockage_std = 0; % Case 1: no extra blockage.
+                        blockage_std = 0;
                     elseif max(endpoint_heights) < blocker_height
                         blockage_mean = 9 + max(0, ...
                             15*log10(obj.d_3D(txrx)) - 41);
-                        blockage_std = 4.5; % Case 2.
+                        blockage_std = 4.5;
                     else
                         blockage_mean = 5 + max(0, ...
                             15*log10(obj.d_3D(txrx)) - 41);
-                        blockage_std = 4; % Case 3, including equal heights.
+                        blockage_std = 4;
                     end
-                    pathloss_dB = pathloss_dB + ...
-                        max(0, blockage_mean + blockage_std*randn);
+                    blockage_loss_dB = max(0, blockage_mean + blockage_std*randn);
+                    pathloss_dB = pathloss_dB + blockage_loss_dB;
                 end
             end
         end
@@ -979,7 +1049,7 @@ classdef Target_channel < handle
                 ue_mono_zsa_std = [];
                 switch obj.targetReferenceScenarioName()
                     case {'UMa','UrbanGrid'}
-                        if obj.isUrbanGridVehicleV2PTarget()
+                        if obj.isUrbanGridVehicleV2PTarget(txrx)
                             [corr_rand_vec, ue_mono_asa_std, ...
                                 ue_mono_zsa_std] = ...
                                 obj.urbanGridVehicleV2pLsp(txrx, fc_GHz);
@@ -1032,7 +1102,7 @@ classdef Target_channel < handle
                                     obj.mu_offset_ZOD(txrx) = 0;
                                     raw_rand_vec = obj.drawLspRawRandn(7, txrx);
                                     corr_rand_vec = reshape(raw_rand_vec,[numel(raw_rand_vec), 1]);
-                                    corr_rand_vec = obj.scenario.Cross_correlation_LOS*corr_rand_vec;
+                                    corr_rand_vec = obj.targetLspCorrelation('LOS', txrx)*corr_rand_vec;
                                     % SF/K/DS/ASD/ASA/ZSD/ZSA
                                     % lsp_std_vec = [obj.sigma_SF, 5, 0.39, 0.43, 0.19, obj.sigma_lgZSD, 0.16]';
                                     lsp_std_vec = [obj.sigma_SF(txrx), 3.5, 0.57+0.026*log10(fc_GHz), 0.31, 0.19, obj.sigma_lgZSD(txrx), 0.15]';
@@ -1060,13 +1130,15 @@ classdef Target_channel < handle
                                 else % NLOS
                                     obj.mu_lgZSD(txrx) = max(-0.5, -2.1*(obj.d_2D(txrx)/1000)-0.01*(obj.ST.height-1.5)+0.9);
                                     obj.sigma_lgZSD(txrx) = 0.49;
+                                    % TR 38.901 Table 7.5-7: c(fc) and the height
+                                    % correction are both inside the exponent.
                                     obj.mu_offset_ZOD(txrx) = (7.66*log10(fc_GHz) - 5.96) ...
-                                        - 10^((0.208*log10(fc_GHz) - 0.782) * log10(max(25, obj.d_2D(txrx)))) ...
+                                        - 10^((0.208*log10(fc_GHz) - 0.782) * log10(max(25, obj.d_2D(txrx))) ...
                                         + (-0.13*log10(fc_GHz) + 2.03) ...
-                                        - 0.07*(obj.ST.height - 1.5);
+                                        - 0.07*(obj.ST.height - 1.5));
                                     raw_rand_vec = obj.drawLspRawRandn(6, txrx);
                                     corr_rand_vec = reshape(raw_rand_vec,[numel(raw_rand_vec), 1]);
-                                    corr_rand_vec = obj.scenario.Cross_correlation_NLOS*corr_rand_vec;
+                                    corr_rand_vec = obj.targetLspCorrelation('NLOS', txrx)*corr_rand_vec;
                                     % SF/DS/ASD/ASA/ZSD/ZSA
                                     lsp_std_vec = [obj.sigma_SF(txrx), 0.39, 0.44, (0.17-0.03*log10(fc_GHz)), obj.sigma_lgZSD(txrx), 0.17]';
                                     lsp_offset_vec = lsp_std_vec.*corr_rand_vec;
@@ -1195,7 +1267,7 @@ classdef Target_channel < handle
                                 obj.mu_offset_ZOD(txrx) = -10^(-1.5*log10(max(10, obj.d_2D_out(txrx)))+3.3);
                             end
                             raw_rand_vec = obj.drawLspRawRandn(6, txrx);
-                            corr_rand_vec = obj.targetLspCorrelation('O2I')*raw_rand_vec;
+                            corr_rand_vec = obj.targetLspCorrelation('O2I', txrx)*raw_rand_vec;
                             lsp_std_vec = [obj.sigma_SF(txrx), 0.32, 0.42, 0.16, obj.sigma_lgZSD(txrx), 0.43]';
                             lsp_offset_vec = lsp_std_vec.*corr_rand_vec;
                             obj.SF(txrx) = lsp_offset_vec(1);
@@ -1223,7 +1295,7 @@ classdef Target_channel < handle
                                 obj.sigma_lgZSD(txrx) = 0.35; % 0.4
                                 obj.mu_offset_ZOD(txrx) = 0;
                                 raw_rand_vec = obj.drawLspRawRandn(7, txrx);
-                                corr_rand_vec = obj.targetLspCorrelation('LOS')*raw_rand_vec;
+                                corr_rand_vec = obj.targetLspCorrelation('LOS', txrx)*raw_rand_vec;
                                 % SF/K/DS/ASD/ASA/ZSD/ZSA
                                 % lsp_std_vec = [obj.sigma_SF, 5, 0.4, 0.43, 0.19, obj.sigma_lgZSD, 0.16]';
                                 lsp_std_vec = [obj.sigma_SF(txrx), 5, 0.39,  (0.08*log10(1+fc_GHz)+0.29), (0.021*log10(1+fc_GHz)+0.26), obj.sigma_lgZSD(txrx), (-0.03*log10(1+fc_GHz)+0.29)]';
@@ -1231,6 +1303,9 @@ classdef Target_channel < handle
                                 obj.SF(txrx) = lsp_offset_vec(1);
                                 obj.K(txrx) = lsp_offset_vec(2)+9;
                                 obj.DS(txrx) = 10.^(lsp_offset_vec(3)+(-0.18*log10(1+fc_GHz)-7.28));
+                                if strcmp(obj.scenario.subname, 'AV') && obj.scenario.alternative == 3
+                                    obj.K(txrx) = 15;
+                                end
                                 obj.ASD(txrx) = 10.^(lsp_offset_vec(4)+(-0.05*log10(1+fc_GHz)+1.21));
                                 obj.ASA(txrx) = 10.^(lsp_offset_vec(5)+(-0.07*log10(1+fc_GHz)+1.66));
                                 obj.ZSD(txrx) = 10.^(lsp_offset_vec(6)+obj.mu_lgZSD(txrx));
@@ -1254,7 +1329,7 @@ classdef Target_channel < handle
                                 % obj.mu_offset_ZOD = -10^(-0.55*log10(max(10, obj.d_2D))+1.6);
                                 obj.mu_offset_ZOD(txrx) = -10.^(-1.5*log10(max(10, obj.d_2D(txrx)))+3.3);
                                 raw_rand_vec = obj.drawLspRawRandn(6, txrx);
-                                corr_rand_vec = obj.targetLspCorrelation('NLOS')*raw_rand_vec;
+                                corr_rand_vec = obj.targetLspCorrelation('NLOS', txrx)*raw_rand_vec;
                                 % SF/DS/ASD/ASA/ZSD/ZSA
                                 lsp_std_vec = [obj.sigma_SF(txrx), (0.19*log10(1+fc_GHz)+0.22), (0.10*log10(1+fc_GHz)+0.33), (0.05*log10(1+fc_GHz)+0.27), obj.sigma_lgZSD(txrx), (-0.05*log10(1+fc_GHz)+0.35)]';
                                 lsp_offset_vec = lsp_std_vec.*corr_rand_vec;
@@ -1451,7 +1526,9 @@ classdef Target_channel < handle
                             ue_mono_zsa_std = 0.45;
                         end
                 end
-                if obj.isUeMonostatic()
+                if (obj.isUeMonostatic() && ~strcmp(obj.ST.type.sensing_type, 'UAV')) ...
+                        || (ismember(obj.scenario.name, {'InH', 'InF'}) ...
+                        && strcmp(obj.sector(txrx).type, 'UE'))
                     % Case 5 uses ASA/ZSA distributions for ASD/ZSD, not
                     % the same per-link realizations. Keep the distinct
                     % correlated draws of the departure-spread components.
@@ -1514,6 +1591,8 @@ classdef Target_channel < handle
                     obj.c_ASA(2) = obj.c_ASA(1);
                     obj.c_ZSA(2) = obj.c_ZSA(1);
                     obj.c_ASD(2) = obj.c_ASD(1);                    
+                    if ~isempty(obj.c_DS), obj.c_DS(2) = obj.c_DS(1); end
+                    if ~isempty(obj.c_ZSD), obj.c_ZSD(2) = obj.c_ZSD(1); end
                     break;
                 end
             end
@@ -2235,7 +2314,12 @@ classdef Target_channel < handle
                 [rn1, rn2, rn3] = obj.drawTargetCouplingSeeds(txrx);
                 obj.coupleTargetLinkRays(txrx, rn1, rn2, rn3, rayGroups);
                 if obj.static ==1
-                    obj.coupleTargetLinkRays(2, rn1, rn2, rn3, rayGroups);
+                    % Preserve monostatic reverse-ray correspondence after coupling.
+                    % Copy the coupled ray tuples, swapping arrival/departure roles.
+                    obj.phi_n_m_AOA(2,:,:) = obj.phi_n_m_AOD(1,:,:);
+                    obj.phi_n_m_AOD(2,:,:) = obj.phi_n_m_AOA(1,:,:);
+                    obj.theta_n_m_ZOA(2,:,:) = obj.theta_n_m_ZOD(1,:,:);
+                    obj.theta_n_m_ZOD(2,:,:) = obj.theta_n_m_ZOA(1,:,:);
                     break;
                 end
             end
@@ -2243,15 +2327,19 @@ classdef Target_channel < handle
 
         function Coupling_txrx(obj)
             coupling_txrx_n_m_table_ = [];
-            if obj.bLOS(1) && obj.bLOS(2)
+            direct = obj.bLOS;
+            if obj.isOutdoorHumanTrpUe() || obj.isUeUe()
+                direct = direct & ~obj.leg_O2I;
+            end
+            if direct(1) && direct(2)
                 coupling_txrx_n_m_table_= [coupling_txrx_n_m_table_;0,0,0,0];
             end
-            if obj.bLOS(1)
+            if direct(1)
                 [coupling_los_nlos_rx_n, coupling_los_nlos_rx_m] = ndgrid(1:obj.N_new(2),1:obj.M(2));
                 coupling_los_nlos = [zeros(numel(coupling_los_nlos_rx_n),2), coupling_los_nlos_rx_n(:), coupling_los_nlos_rx_m(:)];
                 coupling_txrx_n_m_table_= [coupling_txrx_n_m_table_;coupling_los_nlos];
             end
-            if obj.bLOS(2)
+            if direct(2)
                 [coupling_los_nlos_tx_n, coupling_los_nlos_tx_m] = ndgrid(1:obj.N_new(1),1:obj.M(1));
                 coupling_los_nlos = [coupling_los_nlos_tx_n(:), coupling_los_nlos_tx_m(:),zeros(numel(coupling_los_nlos_tx_n),2)];
                 coupling_txrx_n_m_table_= [coupling_txrx_n_m_table_;coupling_los_nlos];
@@ -2280,13 +2368,13 @@ classdef Target_channel < handle
         function Path_power(obj)
             power_tx = zeros(obj.path_num,1);
             power_rx = zeros(obj.path_num,1);
-            if obj.bLOS(1) && ~obj.O2I
+            if obj.bLOS(1) && ~obj.targetLegO2I(1)
                 KR_tx = 10^(obj.K(1)/10);
 
             else
                 KR_tx = 0;
             end
-            if obj.bLOS(2) && ~obj.O2I
+            if obj.bLOS(2) && ~obj.targetLegO2I(2)
                 KR_rx = 10^(obj.K(2)/10);
             else
                 KR_rx = 0;
@@ -2348,15 +2436,27 @@ classdef Target_channel < handle
                     {'scalar', 'real', 'finite', '<=', 0}, mfilename, ...
                     'scenario.target_path_drop_threshold_db');
             end
-            keep_tmp(~(is_0_tx & is_0_rx)) = ...
-                (10*log10(obj.P_path(~(is_0_tx & is_0_rx))/max(obj.P_path)) ...
-                >= path_drop_threshold_db);
+            % Requested comparison: include LOS-LOS in the reference maximum
+            % for all target modes/scenarios, while always retaining it.
+            is_R0 = ~(is_0_tx & is_0_rx);
+            if any(is_R0)
+                max_power_all = max(obj.P_path);
+                keep_tmp(is_R0) = ...
+                    (10*log10(obj.P_path(is_R0)/max_power_all) ...
+                    >= path_drop_threshold_db);
+            end
             keep_tmp(is_0_tx & is_0_rx) = true;
 
             obj.keep_path = keep_tmp;
             obj.P_path_keep  = obj.P_path(keep_tmp);
             obj.coupling_txrx_path_table_keep = obj.coupling_txrx_path_table(keep_tmp,:);
             obj.path_num_keep = size(obj.coupling_txrx_path_table_keep,1);
+
+            if obj.isUeMonostatic() && strcmp(obj.scenario.name, 'UrbanGrid') ...
+                    && strcmp(obj.ST.type.sensing_type, 'Vehicle')
+                obj.Step10Diagnostics = struct('power_tx', power_tx, ...
+                    'power_rx', power_rx, 'sigma_D', sigma_D_path);
+            end
 
         end
 
@@ -2390,11 +2490,9 @@ classdef Target_channel < handle
             idx_m_3 = idx_n(ismember(obj.coupling_txrx_path_table_keep(idx_n,4) , ray_idlist_3));
             tau_rx(idx_m_3) = tau_rx(idx_m_3) + obj.map_delay(2,obj.coupling_txrx_path_table_keep(idx_m_3,4)).';
             
-            % Human full calibration keeps the absolute-delay model of the
-            % deployment scenario (TR 38.901 Table 7.9.6.2-2).  Therefore
-            % UMa UE_mono uses UMa here even though its Case-5 UE-UE
-            % propagation legs use the UMi-Street Canyon baseline.
-            switch obj.scenario.name
+           
+            % Use the same reference model as pathloss and fast fading.
+            switch obj.targetReferenceScenarioName()
                 case {'UMa','UrbanGrid'}
                 obj.mu_lg_delta_tau = -7.4;
                 obj.sigma_lg_delta_tau = 0.2;
@@ -2411,12 +2509,11 @@ classdef Target_channel < handle
 
             delta_tx = zeros(obj.path_num_keep,1);
             delta_rx = zeros(obj.path_num_keep,1);
-            % delta_tx(isnot_0_tx) = 10.^(randn(length(isnot_0_tx),1)*obj.sigma_lg_delta_tau + obj.mu_lg_delta_tau);
-            delta_tx(isnot_0_tx) = obj.targetLegDelayOffset(leg_small_scale_cache, 1);
+            delay_offset_tx = obj.targetLegDelayOffset(leg_small_scale_cache, 1);
+            delta_tx(isnot_0_tx) = delay_offset_tx;
             if obj.static == 1
-                delta_rx = delta_tx;
+                delta_rx(isnot_0_rx) = delay_offset_tx;
             else
-                % delta_rx(isnot_0_rx) = 10.^(randn(length(isnot_0_rx),1)*obj.sigma_lg_delta_tau + obj.mu_lg_delta_tau);
                 delta_rx(isnot_0_rx) = obj.targetLegDelayOffset(leg_small_scale_cache, 2);
             end
 
@@ -2506,10 +2603,15 @@ classdef Target_channel < handle
              [tf_step_13_5, loc_step_13_5] = ismember(coupling_txrx_n_m_table_keep_swap, obj.coupling_txrx_path_table_keep, 'rows');
              idx_a_step_13_5 = find(tf_step_13_5);
              idx_b_step_13_5 = loc_step_13_5(idx_a_step_13_5);
-             mask_step_13_5 = idx_a_step_13_5 < idx_b_step_13_5;
-             idx_a_step_13_5 = idx_a_step_13_5(mask_step_13_5);
-             idx_b_step_13_5 = idx_b_step_13_5(mask_step_13_5);
-             CPM_spst(:,:,idx_a_step_13_5) = permute(CPM_spst(:,:,idx_b_step_13_5), [2 1 3]);
+             if obj.static == 1
+                 % A self-reversed monostatic path requires CPM = CPM.' (no conjugation).
+                 idx_self_step_13_5 = idx_a_step_13_5(idx_a_step_13_5 == idx_b_step_13_5);
+                 CPM_spst(2,1,idx_self_step_13_5) = CPM_spst(1,2,idx_self_step_13_5);
+                 mask_step_13_5 = idx_a_step_13_5 < idx_b_step_13_5;
+                 idx_a_step_13_5 = idx_a_step_13_5(mask_step_13_5);
+                 idx_b_step_13_5 = idx_b_step_13_5(mask_step_13_5);
+                 CPM_spst(:,:,idx_a_step_13_5) = permute(CPM_spst(:,:,idx_b_step_13_5), [2 1 3]);
+             end
 
              % ========= 2) Build per-path CPM_tx_page and CPM_rx_page (each 2?2?A) =========
              % Flatten 2?2?N?M -> 2?2?(N*M) so we can over_half_circle with sub2ind
@@ -2690,10 +2792,6 @@ classdef Target_channel < handle
                 ray_power_sqrt = reshape(ray_power_sqrt, 1,1,obj.path_num_keep);
                 phase_doppler_ = reshape(phase_doppler_, 1,1,obj.path_num_keep);
 
-                % Full-calibration coupling loss is defined for a specific
-                % Tx/Rx antenna-port pair.  The target-polarization factor
-                % sqrt((|d11|^2+|d22|^2)/2) is already applied when CPM_all
-                % is normalized, so do not average H11 and H22 again here.
                 calibration_power = sum(abs( ...
                     polarized_channel(:,:,:,1,1) .* ray_power_sqrt).^2, "all");
                 obj.H_fastfading = sum(abs(polarized_channel.* ray_power_sqrt .*phase_doppler_.*phase_tx.*phase_rx).^2, [3 4 5]);   % U x S                
@@ -3033,6 +3131,114 @@ classdef Target_channel < handle
     end
 
     methods(Access = private)
+        function tf = isOutdoorHumanTrpUe(obj)
+            tf = strcmp(obj.sensing_mode, 'BS_UE_bistatic') ...
+                && ismember(obj.scenario.name, {'UMa', 'UMi'}) ...
+                && strcmp(obj.ST.type.sensing_type, 'Human');
+        end
+
+        function tf = targetLegO2I(obj, txrx)
+            if obj.isOutdoorHumanTrpUe() || obj.isUeUe()
+                tf = obj.leg_O2I(txrx);
+            else
+                tf = obj.O2I;
+            end
+        end
+
+        function tf = isUavTrpUe(obj)
+            tf = strcmp(obj.sensing_mode, 'BS_UE_bistatic') ...
+                && strcmp(obj.ST.type.sensing_type, 'UAV') ...
+                && strcmp(obj.scenario.name, 'UMa') && strcmp(obj.scenario.subname, 'AV');
+        end
+
+        function tf = isUeUe(obj)
+            tf = strcmp(obj.sensing_mode, 'UE_UE');
+        end
+
+        function generateReferencedTrpUe(obj, step24_cache, small_cache)
+            if ~obj.isStep24CacheAvailable(step24_cache)
+                step24_cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+            end
+            if ~obj.isLegSmallScaleCacheAvailable(small_cache)
+                small_cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+            end
+            obj.leg_O2I = [false, logical(obj.sector(2).Indoor)];
+            obj.leg_reference_scenario = {obj.scenario.name, 'UMi'};
+            if obj.isUeUe()
+                obj.leg_O2I = logical([obj.sector.Indoor]);
+                if ismember(obj.scenario.name, {'UMa','UMi'})
+                    obj.leg_reference_scenario = {'UMi','UMi'};
+                else
+                    obj.leg_reference_scenario = {obj.scenario.name,obj.scenario.name};
+                end
+                if ismember(obj.scenario.name, {'InH','InF','UrbanGrid'})
+                    obj.leg_O2I(:) = false;
+                end
+            end
+            for txrx = 1:2
+                physical_key = obj.targetPhysicalLegCacheKey(txrx);
+                directed_key = obj.targetLegCacheKey(txrx);
+                needs_lsp = ~isKey(step24_cache, physical_key);
+                needs_rays = obj.fastfading_enable && ~isKey(small_cache, directed_key);
+                reference = [];
+                if needs_lsp || needs_rays
+                    reference_scenario = obj.scenario;
+                    if txrx == 2 || obj.isUeUe()
+                        if obj.isUavTrpUe() || ...
+                                (obj.isUeUe() && strcmp(obj.ST.type.sensing_type, 'UAV'))
+                            reference_scenario = comm_scenario.UMi();
+                            reference_scenario.subname = 'AV';
+                            reference_scenario.alternative = 3;
+                        elseif obj.isUeUe() && ismember(obj.scenario.name, {'InH','InF','UrbanGrid'})
+                            reference_scenario = obj.scenario;
+                        elseif strcmp(obj.scenario.name, 'UMi')
+                            reference_scenario = comm_scenario.UMi();
+                        else
+                            reference_scenario = comm_scenario.UMa();
+                        end
+                        reference_scenario.frequency = obj.fc;
+                        reference_scenario.BW = obj.scenario.BW;
+                        reference_scenario.spatial_consistency_enable = false;
+                    end
+                    obj.leg_reference_scenario{txrx} = reference_scenario.name;
+                    endpoint = obj.sector(txrx);
+                    reference = channel.Target_channel(endpoint, endpoint, obj.ST, ...
+                        reference_scenario, false, obj.t, step24_cache, [], true);
+                    state = step24_cache(physical_key);
+                    if needs_lsp
+                        state.indoor_depth = reference.d_2D_in(1);
+                        step24_cache(physical_key) = state;
+                    end
+                end
+                state = step24_cache(physical_key);
+                obj.applyStep24LegState(txrx, state);
+                if isfield(state, 'indoor_depth')
+                    obj.d_2D_in(txrx) = state.indoor_depth;
+                    obj.d_2D_out(txrx) = obj.d_2D(txrx)-state.indoor_depth;
+                end
+                if obj.fastfading_enable
+                    if needs_rays
+                        reference.generateSnapshotStep58();
+                        small_cache(directed_key) = reference.captureStep58LegState(txrx);
+                    end
+                    obj.applyStep58LegState(txrx, small_cache(directed_key));
+                end
+            end
+            if obj.isOutdoorHumanTrpUe() && strcmp(obj.scenario.name, 'UMi')
+                obj.SF(2) = 7 * obj.SF(2) / obj.sigma_SF(2);
+                obj.sigma_SF(2) = 7;
+            end
+            if obj.fastfading_enable
+                obj.Coupling_txrx();
+                obj.Path_power();
+                obj.Absolute_Delay(small_cache);
+                obj.generate_XPRs(small_cache);
+                obj.initial_random_phases(small_cache);
+                obj.prepare_channel_parameter();
+                obj.generate_channel();
+            end
+        end
+
         function tf = isStep24CacheAvailable(obj, step24_cache) %#ok<INUSL>
             tf = isa(step24_cache, 'containers.Map');
         end
@@ -3070,7 +3276,7 @@ classdef Target_channel < handle
 
         function [spread, ray_offset_scale, mean_offset] = step7ZenithParameters(obj, txrx, angle_type)
             is_reverse_bistatic_leg = obj.static == 2 && txrx == 2;
-            if obj.isUrbanGridVehicleV2PTarget()
+            if obj.isUrbanGridVehicleV2PTarget(txrx)
                 % TR 37.885 Table 6.2.3-1: ZOD uses the ZOA procedure.
                 zsd_ray_offset_scale = obj.c_ZSD(txrx);
             else
@@ -3296,7 +3502,7 @@ classdef Target_channel < handle
                 if same_endpoint
                     sensing_mode = 'UE_mono';
                 else
-                    sensing_mode = 'UE_UE_bistatic';
+                    sensing_mode = 'UE_UE';
                 end
             else
                 sensing_mode = sprintf('%s_%s_bistatic', STX.type, SRX.type);
@@ -3307,9 +3513,19 @@ classdef Target_channel < handle
             tf = strcmp(obj.sensing_mode, 'UE_mono');
         end
 
-        function subname = targetReferenceInFSubscenario(obj)
+        function subname = targetReferenceInFSubscenario(obj, txrx)
+            if nargin < 2, txrx = 1; end
             subname = obj.scenario.subname;
-            if ~obj.isUeMonostatic() || ~strcmp(obj.scenario.name, 'InF')
+            if strcmp(obj.scenario.name, 'InF') ...
+                    && strcmp(obj.sensing_mode, 'BS_UE_bistatic') ...
+                    && strcmp(obj.sector(txrx).type, 'UE') ...
+                    && strcmp(obj.ST.type.sensing_type, 'AGV')
+                subname = 'SL';
+                return;
+            end
+            if ~strcmp(obj.scenario.name, 'InF') ...
+                    || ~(obj.isUeMonostatic() || ...
+                    (strcmp(obj.sensing_mode, 'BS_UE_bistatic') && strcmp(obj.sector(txrx).type, 'UE')))
                 return;
             end
             % TR 38.858 Annex A.3 uses an InF UE-UE reference endpoint
@@ -3318,7 +3534,7 @@ classdef Target_channel < handle
             % high BS and can yield an invalid probability for a low UE.
             % NLOS pathloss for InF-SH UE-mono calibration is selected
             % separately in pathloss().
-            if obj.sector(1).height < obj.scenario.hc
+            if obj.sector(txrx).height < obj.scenario.hc
                 switch subname
                     case 'SH'
                         subname = 'SL';
@@ -3329,24 +3545,40 @@ classdef Target_channel < handle
         end
 
         function scenario_name = targetReferenceScenarioName(obj)
-            if obj.isUeMonostatic() && strcmp(obj.scenario.name, 'UMa')
+            if obj.isUeUe() && strcmp(obj.scenario.name, 'UMa') ...
+                    && ~strcmp(obj.ST.type.sensing_type, 'UAV')
+                scenario_name = 'UMi';
+            elseif obj.isUeMonostatic() && strcmp(obj.scenario.name, 'UMa')
                 % TR 38.901 Table 7.9.3-1 Case 5 refers UE-UE links to
                 % TR 38.858 Annex A.3. Its baseline outdoor propagation
                 % option uses UMi-Street Canyon with hBS = 1.5 m, including
-                % for an outer UMa deployment.  Absolute delay remains tied
-                % to the outer scenario per TR 38.901 Table 7.9.6.2-2.
+                % for an outer UMa deployment. Use this reference model for
+                % pathloss, LSPs, fast fading and absolute-delay offsets.
                 scenario_name = 'UMi';
             else
                 scenario_name = obj.scenario.name;
             end
         end
 
-        function correlation = targetLspCorrelation(obj, condition)
-            if obj.isUeMonostatic() && strcmp(obj.scenario.name, 'UMa')
+        function correlation = targetLspCorrelation(obj, condition, txrx)
+            persistent uma_correlations umi_correlations
+            if obj.isUrbanGridVehicleV2BTarget(txrx)
+                % UrbanGrid Automotive TRP legs use UMa-based V2B fast
+                % fading, including its LSP correlations, not sidelink's.
+                % Do not replace UrbanGrid's matrices: UE-mono V2P still
+                % requires its separate Urban sidelink parameter set.
+                if isempty(uma_correlations)
+                    reference_scenario = comm_scenario.UMa();
+                    uma_correlations = struct( ...
+                        'LOS', reference_scenario.Cross_correlation_LOS, ...
+                        'NLOS', reference_scenario.Cross_correlation_NLOS);
+                end
+                correlation = uma_correlations.(condition);
+            elseif strcmp(obj.targetReferenceScenarioName(), 'UMi') ...
+                    && ~strcmp(obj.scenario.name, 'UMi')
                 % Case 5 UMa layout still uses the UMi UE-UE LSP model.
                 % Cache its correlation matrices instead of rebuilding the
                 % reference scenario for every UE-target link.
-                persistent umi_correlations
                 if isempty(umi_correlations)
                     reference_scenario = comm_scenario.UMi();
                     umi_correlations = struct( ...
@@ -3514,6 +3746,7 @@ classdef Target_channel < handle
         function fields = step24LegFieldNames(obj) %#ok<MANU>
             fields = { ...
                 'bLOS', ...
+                'v2x_condition', ...
                 'PL', ...
                 'sigma_SF', ...
                 'SF', ...
@@ -3535,7 +3768,8 @@ classdef Target_channel < handle
                 'c_DS', ...
                 'c_ASA', ...
                 'c_ZSA', ...
-                'c_ASD'};
+                'c_ASD', ...
+                'c_ZSD'};
         end
 
         function assertProcedureBSupported(obj)

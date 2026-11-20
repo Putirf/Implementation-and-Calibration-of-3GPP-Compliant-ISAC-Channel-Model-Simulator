@@ -1,4 +1,4 @@
-function plot_TRP_mono_result(TRP_mono_target_result, calibrationRoot)
+function entries = plot_TRP_mono_result(TRP_mono_target_result, calibrationRoot, benchmarkOnly)
 %PLOT_TRP_MONO_RESULT Plot multi-frequency TRP calibration CDF figures.
 %
 %   plot_TRP_mono_result(TRP_mono_target_result)
@@ -17,6 +17,7 @@ function plot_TRP_mono_result(TRP_mono_target_result, calibrationRoot)
 %   .Full.SA
 
 paths = get_ISAC_calibration_paths();
+entries = [];
 addpath(paths.isacRoot);
 
 if nargin < 2 || isempty(calibrationRoot)
@@ -66,6 +67,10 @@ for ir = 1:numel(results)
     entries(ir).sheet = sheet;
     entries(ir).benchLS = localReadBenchmark(xlsxLS, sheet);
     entries(ir).benchFull = localReadBenchmark(xlsxFull, sheet);
+end
+% Reuse exactly the standard benchmark loader for diagnostic overlays.
+if nargin >= 3 && benchmarkOnly
+    return;
 end
 
 for plotIndex = 1:numel(entries)
@@ -144,6 +149,15 @@ end
 
 caseInfo.scenario = string(result.scenario);
 caseInfo.senType = string(result.sen_type);
+caseInfo.urbanUtType = 'Pedestrian';
+if caseInfo.caseCombination == 7 && isfield(result, 'urban_ut_type') ...
+        && isfield(result, 'link_type') && startsWith(string(result.link_type), "UEmo")
+    caseInfo.urbanUtType = validatestring(char(result.urban_ut_type), ...
+        {'Pedestrian', 'RSU', 'Vehicle'});
+    if ~strcmp(caseInfo.urbanUtType, 'Pedestrian')
+        caseInfo.scenario = caseInfo.scenario + " " + string(caseInfo.urbanUtType) + " UT";
+    end
+end
 end
 
 function [xlsxLS, xlsxFull] = localGetCalibrationFiles(caseInfo, calibrationRoot)
@@ -181,8 +195,17 @@ switch caseInfo.caseCombination
         xlsxLS = fullfile(folder, 'AGVLargeScaleCalibration_InF-SH_TerrestrialUT_OneScatteringPoint_v006_BUPT_IDCC.xlsx');
         xlsxFull = fullfile(folder, 'AGVFullCalibration_InF-SH_ConcatenationOption2_TerrestrialUT_OneScatteringPoint_v006_IDCC_mod.xlsx');
     case 7
-        xlsxLS = fullfile(folder, 'AutoLargeScaleCalibration_UrbanGrid_PedestrianUT_OneScatteringPoint_v014_BUPT_mod.xlsx');
-        xlsxFull = fullfile(folder, 'AutoFullCalibration_UrbanGrid_ConcatenationOption2_PedestrianUT_OneScatteringPoint_v013_mod.xlsx');
+        switch caseInfo.urbanUtType
+            case 'RSU'
+                xlsxLS = fullfile(folder, 'AutoLargeScaleCalibration_UrbanGrid_RSUTypeUT_OneScatteringPoint_v008_CATT_mod.xlsx');
+                xlsxFull = fullfile(folder, 'AutoFullCalibration_UrbanGrid_ConcatenationOption2_RSUTypeUT_OneScatteringPoint_v009_mod.xlsx');
+            case 'Vehicle'
+                xlsxLS = fullfile(folder, 'AutoLargeScaleCalibration_UrbanGrid_VehicleUT_OneScatteringPoint_v003_xiaomi2_mod.xlsx');
+                xlsxFull = fullfile(folder, 'AutoFullCalibration_UrbanGrid_ConcatenationOption2_VehicleUT_OneScatteringPoint_v004_xiaomi_mod.xlsx');
+            otherwise
+                xlsxLS = fullfile(folder, 'AutoLargeScaleCalibration_UrbanGrid_PedestrianUT_OneScatteringPoint_v014_BUPT_mod.xlsx');
+                xlsxFull = fullfile(folder, 'AutoFullCalibration_UrbanGrid_ConcatenationOption2_PedestrianUT_OneScatteringPoint_v013_mod.xlsx');
+        end
     otherwise
         error('Unsupported case combination: %d.', caseInfo.caseCombination);
 end
@@ -305,7 +328,8 @@ for i = 1:numel(compRow)
 end
 
 compStr = strtrim(compStr);
-valid = compStr ~= "" & lower(compStr) ~= "<missing>";
+valid = compStr ~= "" & lower(compStr) ~= "<missing>" ...
+    & ~ismember(lower(compStr), ["mean", "average", "avg"]);
 
 if ~any(valid)
     blk = struct('company', string.empty(1, 0), 'x', [], 'f', []);
@@ -390,7 +414,10 @@ if ~isempty(bench) && isfield(bench, metricName)
         colors = 0.8 * colors(2:end, :);
         for i = 1:numel(blk.company)
             [benchmarkX, benchmarkF] = localSanitizeBenchmarkCurve( ...
-                blk.x(:, i), blk.f, metricName, entry.linkType);
+                blk.x(:, i), blk.f, metricName, entry.linkType, entry.caseInfo);
+            if isempty(benchmarkX)
+                continue;
+            end
             h = plot(benchmarkX, benchmarkF, 'Color', colors(i, :), 'LineWidth', 1);
             legendHandles(end + 1) = h; %#ok<AGROW>
             legendLabels(end + 1) = blk.company(i); %#ok<AGROW>
@@ -440,7 +467,7 @@ if ~isempty(legendHandles)
 end
 end
 
-function [x, f] = localSanitizeBenchmarkCurve(x, f, metricName, linkType)
+function [x, f] = localSanitizeBenchmarkCurve(x, f, metricName, linkType, caseInfo)
 % Remove invalid spreadsheet cells without changing simulation samples.
 x = x(:);
 f = f(:);
@@ -448,7 +475,10 @@ valid = isfinite(x) & isfinite(f);
 x = x(valid);
 f = f(valid);
 
-if strcmp(metricName, 'DS') && strcmp(string(linkType), "UEmo(t)") && ...
+isOutdoorHumanBistatic = ismember(string(linkType), ["TRP-UE","UE-UE"]) ...
+    && ismember(caseInfo.caseCombination, [2, 3]);
+if strcmp(metricName, 'DS') ...
+        && (strcmp(string(linkType), "UEmo(t)") || isOutdoorHumanBistatic) && ...
         numel(x) >= 2
     % Some supplied calibration workbooks contain several corrupt DS cells
     % at the upper tail (for example 3552.64 ns followed by 2.25709e11 ns).

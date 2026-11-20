@@ -2,6 +2,12 @@ function  [ST_list, ST_pos_list] = Drop_ST(BS_list, UE_pos_list, scenario, type,
 ST_list = []; ST_pos_list = [];
 id      = 0;
 [plot_controller, St_pos, bs_st_min_d_override] = localParseInputs(varargin{:});
+endpoints_3d = zeros(0, 3);
+min_distance_3d = 0;
+if numel(varargin) >= 5
+    endpoints_3d = varargin{4};
+    min_distance_3d = varargin{5};
+end
 
 BS_ST_min_d = scenario.BS_ST_min_d;
 if ~isempty(bs_st_min_d_override)
@@ -19,7 +25,9 @@ if isempty(St_pos)
         St.SP = 1;
         if ismember(scenario.name, {'RMa', 'UMa', 'UMi'})
             R = scenario.R;
-            ST_pos_2D = network_layout.drop_in_hexagonST(BS.Position(1:2), UE_pos_list, R, BS_ST_min_d, UE_ST_min_d);
+            ST_pos_2D = network_layout.drop_in_hexagonST(BS.Position(1:2), ...
+                UE_pos_list, R, BS_ST_min_d, UE_ST_min_d, ...
+                type.height, endpoints_3d, min_distance_3d);
         elseif ismember(scenario.name, {'InH', 'InF'})
             bs_pos_list = zeros(numel(BS_list), 3);
             for m = 1:numel(BS_list)

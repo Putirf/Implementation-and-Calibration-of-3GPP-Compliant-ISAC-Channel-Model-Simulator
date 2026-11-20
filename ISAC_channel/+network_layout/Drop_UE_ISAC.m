@@ -3,6 +3,10 @@ UE_list = []; ue_pos_list = [];vehicle_list_center = [];
 lowhigh = {'low','high'};
 id      = 0;
 [plot_controller, Ue_pos, ue_environment] = localParseInputs(varargin{:});
+min_ut_spacing = 0;
+if numel(varargin) >= 4
+    min_ut_spacing = varargin{4};
+end
 
 fc      = scenario.frequency;
 BW      = scenario.BW;
@@ -158,7 +162,9 @@ if isempty(Ue_pos)
                         else
                             % outdoor
                             Ue.d_2D_in = zeros(1);
-                            Ue_pos      = network_layout.drop_in_hexagonUE(BS.Position(1:2), R, min_d, sector.boresight,BS.sector_num);
+                            Ue_pos = network_layout.drop_in_hexagonUE(BS.Position(1:2), ...
+                                R, min_d, sector.boresight, BS.sector_num, ...
+                                reshape(ue_pos_list, [], 3), min_ut_spacing);
                             Ue.n_fl     = 1;
                         end
 

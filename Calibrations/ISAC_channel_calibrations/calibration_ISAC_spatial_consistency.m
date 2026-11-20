@@ -7,7 +7,8 @@ paths = get_ISAC_calibration_paths();
 addpath(paths.isacRoot);
 
 %% ISAC spatial consistency calibration controls
-selected_case_ids = 2;
+selected_case_ids = 1;  % 1 for Urban Grid Vehicle ; 2 for InH Human
+
 frequency_presets = {'ISAC_FR1', 'ISAC_FR2'};
 num_ue_per_drop = 120;
 num_drops = 300;

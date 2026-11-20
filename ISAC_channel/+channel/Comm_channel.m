@@ -106,6 +106,8 @@ classdef Comm_channel < handle
         isRP = false
         isUEMonoRP = false
         isTRPTRP = false
+        isUEUE = false
+        ueue_reference = []
     end
 
     methods
@@ -113,20 +115,31 @@ classdef Comm_channel < handle
             obj.t = t;
             obj.TX = TX;
             obj.RX = RX;
-            obj.scenario = scenario;
-            obj.fc = scenario.frequency;
             obj.fastfading_enable = fastfading_enable;
             if ~isempty(varargin) && (ischar(varargin{1}) || isstring(varargin{1}))
                 obj.isTRPTRP = strcmpi(string(varargin{1}), "TRP-TRP");
+                obj.isUEUE = strcmpi(string(varargin{1}), "UE-UE");
+            end
+            if obj.isUEUE && (~strcmp(TX.type,'UE') || ~strcmp(RX.type,'UE') || isequal(TX.ID,RX.ID))
+                error('CommChannel:InvalidUePair','UE-UE background requires two different UTs.');
+            end
+            if obj.isTRPTRP && TX.ID == RX.ID
+                error('TrpTrpBackground:MonostaticPair', ...
+                    'TRP-TRP bistatic background requires two different TRPs.');
             end
             if obj.isTRPTRP && (~strcmp(TX.type, 'BS') || ~strcmp(RX.type, 'BS'))
                 error('CommChannel:InvalidTrpPair', ...
                     'TRP-TRP background mode requires BS equipment at both endpoints.');
             end
+            if obj.isUEUE
+                scenario = obj.ueUeBackgroundScenario(scenario);
+            end
+            obj.scenario = scenario;
+            obj.fc = scenario.frequency;
             if ~obj.isTRPTRP && ~strcmp(RX.type, 'RP') && RX.Indoor
                 obj.O2I = true;
             end
-            if obj.isTRPTRP
+            if obj.isTRPTRP || obj.isUEUE
                 obj.TX_pos_wrap = TX.Position;
             elseif strcmp(obj.RX.type,'RP')   % UE??
                 obj.TX_pos_wrap = TX.Position;
@@ -168,6 +181,21 @@ classdef Comm_channel < handle
 
             [obj.phi_LOS_AOD, obj.theta_LOS_ZOD] = cart2sph_(x, y, z);
             [obj.phi_LOS_AOA, obj.theta_LOS_ZOA] = cart2sph_(-x, -y, -z);
+
+            if obj.isUEUE && strcmp(scenario.name,'UrbanGrid')
+                target=elements.Target();
+                target.ID=RX.ID;
+                target.type=sensing_types.Vehicle();
+                target.type.height=RX.height;
+                target.height=RX.height;
+                target.Position=RX.Position;
+                target.rand_LoS=rand(1,max([TX.ID,RX.ID]));
+                ref=channel.Target_channel(TX,TX,target,scenario,false,t,[],[],true);
+                target.phi_v=90*(ref.urbanGridEndpointSide(RX.Position(1:2))-1);
+                ref.K=[];
+                ref.los_probability(); ref.pathloss(); ref.large_scale_para();
+                obj.ueue_reference=ref;
+            end
 
             %% step 2
             obj.los_probability();
@@ -265,6 +293,16 @@ classdef Comm_channel < handle
                 %% step 11 generate_channel
                 obj.generate_channel();
             end
+
+            if obj.isTRPTRP || obj.isUEUE
+                absolute_delay = obj.d_3D/3e8 + obj.delta_tau;
+                if obj.isUEUE || ~isempty(obj.tau_n_LOS)
+                    obj.tau_absolute = absolute_delay + obj.tau_n_LOS;
+                end
+                if fastfading_enable && (obj.isUEUE || ~isempty(obj.tau_channel))
+                    obj.tau_channel = obj.tau_channel + obj.d_3D/3e8 + obj.delta_tau;
+                end
+            end
         end
 
 
@@ -272,6 +310,10 @@ classdef Comm_channel < handle
         % The LOS probability is derived with assuming antenna heights of
         % 3m for indoor, 10m for UMi, and 25m for UMa
         function los_probability(obj)
+            if ~isempty(obj.ueue_reference)
+                obj.LOS=obj.ueue_reference.bLOS(1);
+                return;
+            end
             d_2Dout = obj.d_2D_out;
             height = obj.referenceRxHeight();
             switch obj.scenario.name
@@ -353,7 +395,7 @@ classdef Comm_channel < handle
                         end
                     end
             end
-            if obj.isTRPTRP
+            if obj.isTRPTRP || obj.isUEUE
                 obj.LOS = rand < Pr_LOS;
             elseif strcmp(obj.RX.type,'RP')
                 obj.LOS = (obj.RX.rand_LoS < Pr_LOS);
@@ -364,6 +406,11 @@ classdef Comm_channel < handle
 
         % caculator the path loss distance depend
         function pathloss(obj)
+            if ~isempty(obj.ueue_reference)
+                obj.PL=obj.ueue_reference.PL(1);
+                obj.sigma_SF=obj.ueue_reference.sigma_SF(1);
+                return;
+            end
             tx_height = obj.referenceTxHeight();
             rx_height = obj.referenceRxHeight();
             fc_GHz = obj.fc/1e9;    % to GHz
@@ -564,6 +611,20 @@ classdef Comm_channel < handle
 
         % caculator the large scale parameters
         function large_scale_para(obj)
+            if ~isempty(obj.ueue_reference)
+                ref=obj.ueue_reference;
+                fields={'SF','K','DS','ASD','ASA','mu_lgZSD','sigma_lgZSD', ...
+                    'mu_offset_ZOD','ZSD','ZSA','r_tau','mu_XPR','sigma_XPR', ...
+                    'N','M','zeta','c_DS','c_ASA','c_ZSA','c_ASD','c_ZSD'};
+                for k=1:numel(fields)
+                    value=ref.(fields{k});
+                    if isempty(value),obj.(fields{k})=[];else,obj.(fields{k})=value(1);end
+                end
+                obj.drop_rp_angle=0;
+                obj.delta_tau=0;
+                if ~obj.LOS,obj.delta_tau=10^(-7.4+0.2*randn);end
+                return;
+            end
             fc_GHz = obj.fc/1e9; %#ok<*PROPLC>
             tx_height = obj.referenceTxHeight();
             rx_height = obj.referenceRxHeight();
@@ -1071,6 +1132,52 @@ classdef Comm_channel < handle
             if obj.isUEMonoRP && ismember(obj.scenario.name, {'UMa','UMi'})
                 % TR 38.901 Clause 7.9.4.2 Step 4: UT-monostatic UMa/UMi.
                 obj.mu_offset_ZOD = 0;
+            end
+            if obj.isUEUE
+                if strcmp(obj.scenario.name,'UMi')
+                    if obj.O2I
+                        asa_std=.16; zsa_std=.43;
+                    elseif obj.LOS
+                        asa_std=.014*log10(1+fc_GHz)+.28;
+                        zsa_std=-.04*log10(1+fc_GHz)+.34;
+                    else
+                        asa_std=.05*log10(1+fc_GHz)+.3;
+                        zsa_std=-.07*log10(1+fc_GHz)+.41;
+                    end
+                elseif strcmp(obj.scenario.name,'InH')
+                    if obj.LOS
+                        asa_std=.12*log10(1+fc_GHz)+.119;
+                        zsa_std=-.04*log10(1+fc_GHz)+.264;
+                    else
+                        asa_std=.12*log10(1+fc_GHz)+.059;
+                        zsa_std=-.09*log10(1+fc_GHz)+.746;
+                    end
+                else
+                    if obj.LOS,asa_std=.12*log10(1+fc_GHz)+.2;zsa_std=.35;
+                    else,asa_std=.3;zsa_std=.45;end
+                end
+                if obj.LOS && ~obj.O2I
+                    asd_idx=4;asa_idx=5;zsd_idx=6;zsa_idx=7;
+                else
+                    asd_idx=3;asa_idx=4;zsd_idx=5;zsa_idx=6;
+                end
+                asa_mu=log10(obj.ASA)-asa_std*corr_rand_vec(asa_idx);
+                zsa_mu=log10(obj.ZSA)-zsa_std*corr_rand_vec(zsa_idx);
+                obj.ASD=10^(asa_mu+asa_std*corr_rand_vec(asd_idx));
+                obj.ZSD=10^(zsa_mu+zsa_std*corr_rand_vec(zsd_idx));
+                obj.c_ASD=obj.c_ASA;
+                obj.mu_lgZSD=zsa_mu;obj.sigma_lgZSD=zsa_std;
+                obj.drop_rp_angle=0;
+                obj.delta_tau=0;
+                if ~obj.LOS
+                    mu=-7.5;sd=.5;
+                    if strcmp(obj.scenario.name,'InH'),mu=-8.6;sd=.1;end
+                    if strcmp(obj.scenario.name,'InF'),sd=.4;end
+                    obj.delta_tau=10^(mu+sd*randn);
+                    if strcmp(obj.scenario.name,'InF')
+                        obj.delta_tau=min(obj.delta_tau,2*max(obj.scenario.L,obj.scenario.W)/3e8);
+                    end
+                end
             end
             obj.ASA = min(obj.ASA, 104);
             obj.ASD = min(obj.ASD, 104);
@@ -3040,6 +3147,24 @@ classdef Comm_channel < handle
     end
 
     methods(Static, Access = private)
+        function reference = ueUeBackgroundScenario(scenario)
+            if ismember(scenario.name, {'UMa','UMi'})
+                reference = comm_scenario.UMi();
+            elseif strcmp(scenario.name, 'InF')
+                reference = comm_scenario.InF('SL');
+                hall_fields = {'L','W','H','V','S','hc','r','d_cluster','x_range','y_range'};
+                for idx = 1:numel(hall_fields)
+                    field = hall_fields{idx};
+                    reference.(field) = scenario.(field);
+                end
+            else
+                reference = scenario;
+            end
+            reference.frequency = scenario.frequency;
+            reference.BW = scenario.BW;
+            reference.spatial_consistency_enable = false;
+        end
+
         function rayGroups = strongClusterRayGroups()
             rayGroups = {
                 [1, 2, 3, 4, 5, 6, 7, 8, 19, 20], ...
